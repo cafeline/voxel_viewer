@@ -12,7 +12,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', [
             'launch/voxel_viewer.launch.py',
-            'launch/demo_with_decompressed.launch.py'
+            'launch/demo_with_decompressed.launch.py',
+            'launch/optimized_viewer_launch.py'
         ]),
     ],
     install_requires=['setuptools', 'open3d', 'numpy'],
@@ -25,6 +26,7 @@ setup(
     entry_points={
         'console_scripts': [
             'voxel_viewer = voxel_viewer.voxel_viewer:main',
+            'optimized_voxel_viewer = voxel_viewer.optimized_voxel_viewer:main',
             'test_comparison = voxel_viewer.test_comparison:main'
         ],
     },
