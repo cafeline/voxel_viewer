@@ -27,6 +27,7 @@ setup(
         'console_scripts': [
             'voxel_viewer = voxel_viewer.voxel_viewer:main',
             'optimized_voxel_viewer = voxel_viewer.optimized_voxel_viewer:main',
+            'voxel_viewer_optimized = voxel_viewer.voxel_viewer_optimized:main',
             'test_comparison = voxel_viewer.test_comparison:main'
         ],
     },

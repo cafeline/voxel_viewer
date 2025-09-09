@@ -21,15 +21,13 @@ def generate_launch_description():
         )
     )
     
-    # Voxel viewer node
+    # Voxel viewer node (optimized version)
     voxel_viewer_node = Node(
         package='voxel_viewer',
-        executable='voxel_viewer',
+        executable='voxel_viewer_optimized',
         name='voxel_viewer',
         output='screen',
         parameters=[{
-            'voxel_size': 0.1,
-            'point_size': 5.0,
             'background_color': [0.1, 0.1, 0.1],
             'show_axes': True
         }],
