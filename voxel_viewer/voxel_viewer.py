@@ -53,6 +53,7 @@ class VoxelViewerNode(Node):
         # Visualization window
         self.vis = None
         self.vis_thread = None
+        self.vis_initialized = False
         self.update_flag = False
         self.lock = threading.Lock()
         
@@ -72,9 +73,7 @@ class VoxelViewerNode(Node):
         self.get_logger().info('VoxelViewer node initialized (comparison mode)')
         self.get_logger().info(f'Subscribing to: occupied_voxel_markers, pattern_markers')
         self.get_logger().info(f'Point matching tolerance: {self.tolerance}')
-        
-        # Start visualization thread
-        self.start_visualization()
+        self.get_logger().info('Waiting for first MarkerArray before opening visualization window...')
 
     def occupied_callback(self, msg):
         """Handle occupied voxel markers."""
@@ -95,9 +94,12 @@ class VoxelViewerNode(Node):
                     f'Max: {self.occupied_points.max(axis=0)}'
                 )
                 
-                # Update comparison if both datasets received
-                if self.pattern_received:
-                    self.update_comparison()
+                # Start visualization thread on first data
+                if not self.vis_initialized:
+                    self.start_visualization()
+                
+                # Update visualization immediately
+                self.update_visualization()
 
     def pattern_callback(self, msg):
         """Handle pattern markers."""
@@ -118,9 +120,62 @@ class VoxelViewerNode(Node):
                     f'Max: {self.pattern_points.max(axis=0)}'
                 )
                 
-                # Update comparison if both datasets received
-                if self.occupied_received:
-                    self.update_comparison()
+                # Start visualization thread on first data
+                if not self.vis_initialized:
+                    self.start_visualization()
+                
+                # Update visualization immediately
+                self.update_visualization()
+    
+    def update_visualization(self):
+        """Update visualization with current data."""
+        if self.occupied_received and self.pattern_received:
+            # Both received - show comparison
+            self.update_comparison()
+        elif self.occupied_received:
+            # Only occupied received - show in blue
+            self.show_single_dataset(self.occupied_points, self.occupied_scale, 'occupied')
+        elif self.pattern_received:
+            # Only pattern received - show in purple
+            self.show_single_dataset(self.pattern_points, self.pattern_scale, 'pattern')
+    
+    def show_single_dataset(self, points, scale, dataset_type):
+        """Show single dataset before comparison."""
+        # Round points to voxel grid
+        def round_to_voxel(points, voxel_size):
+            """Round points to nearest voxel center."""
+            return np.round(points / voxel_size) * voxel_size
+        
+        rounded_points = round_to_voxel(points, scale)
+        unique_points = np.unique(rounded_points, axis=0)
+        
+        # Create point cloud with dataset-specific color
+        all_points = []
+        all_colors = []
+        
+        if dataset_type == 'occupied':
+            # Blue for occupied only
+            color = [0.0, 0.0, 0.7]
+            self.get_logger().info(
+                f'🔵 Occupied only | RGB: {color} | {len(unique_points)} voxels | occupied_voxel_markersのみ'
+            )
+        else:  # pattern
+            # Purple for pattern only
+            color = [0.5, 0.0, 0.7]
+            self.get_logger().info(
+                f'🟣 Pattern only | RGB: {color} | {len(unique_points)} voxels | pattern_markersのみ'
+            )
+        
+        for point in unique_points:
+            all_points.append(point)
+            all_colors.append(color)
+        
+        # Update comparison point cloud
+        if all_points:
+            self.comparison_pcd.points = o3d.utility.Vector3dVector(np.array(all_points))
+            self.comparison_pcd.colors = o3d.utility.Vector3dVector(np.array(all_colors))
+            self.current_voxel_size = scale
+            self.update_flag = True
     
     def update_comparison(self):
         """Compare two point clouds and update visualization."""
@@ -156,19 +211,32 @@ class VoxelViewerNode(Node):
         all_points = []
         all_colors = []
         
-        # Green for matches (semi-transparent: 0.0, 0.6, 0.0 for darker green)
+        # Green for matches
+        green_color = [0.0, 0.6, 0.0]
+        if len(matches) > 0:
+            self.get_logger().info(
+                f'🟢 Match | RGB: {green_color} | {len(matches)} voxels | 両方に存在（一致）'
+            )
+        
         for point in matches:
             all_points.append(point)
-            all_colors.append([0.0, 0.6, 0.0])
+            all_colors.append(green_color)
         
-        # Red for mismatches (semi-transparent: 0.6, 0.0, 0.0 for darker red)
+        # Red for mismatches
+        red_color = [0.6, 0.0, 0.0]
+        total_mismatches = len(occupied_only) + len(pattern_only)
+        if total_mismatches > 0:
+            self.get_logger().info(
+                f'🔴 Mismatch | RGB: {red_color} | {total_mismatches} voxels | 片方のみ（不一致）'
+            )
+        
         for point in occupied_only:
             all_points.append(point)
-            all_colors.append([0.6, 0.0, 0.0])
+            all_colors.append(red_color)
         
         for point in pattern_only:
             all_points.append(point)
-            all_colors.append([0.6, 0.0, 0.0])
+            all_colors.append(red_color)
         
         # Update comparison point cloud
         if all_points:
@@ -178,17 +246,15 @@ class VoxelViewerNode(Node):
             # Store the voxel size for visualization
             self.current_voxel_size = comparison_voxel_size
             self.update_flag = True
-            
-            self.get_logger().info(
-                f'Updated comparison visualization with {len(all_points)} total points, '
-                f'voxel size: {comparison_voxel_size:.3f}'
-            )
 
     def start_visualization(self):
         """Start the Open3D visualization in a separate thread."""
-        self.vis_thread = threading.Thread(target=self.visualization_loop)
-        self.vis_thread.daemon = True
-        self.vis_thread.start()
+        if not self.vis_initialized:
+            self.vis_initialized = True
+            self.get_logger().info('Starting Open3D visualization window...')
+            self.vis_thread = threading.Thread(target=self.visualization_loop)
+            self.vis_thread.daemon = True
+            self.vis_thread.start()
 
     def visualization_loop(self):
         """Main visualization loop running in separate thread."""
@@ -220,8 +286,6 @@ class VoxelViewerNode(Node):
         while True:
             with self.lock:
                 if self.update_flag:
-                    self.get_logger().info('Updating Open3D visualization...')
-                    
                     # Create voxel grid from point cloud for better visualization
                     if len(self.comparison_pcd.points) > 0:
                         # Remove old voxel grid
@@ -236,11 +300,8 @@ class VoxelViewerNode(Node):
                         # Add new voxel grid
                         self.vis.add_geometry(self.voxel_grid, reset_bounding_box=False)
                         
+                        # Silent update - no need to log every frame
                         total_voxels = len(self.voxel_grid.get_voxels())
-                        self.get_logger().info(
-                            f'Updated visualization with {total_voxels} voxels '
-                            f'(voxel size: {self.current_voxel_size:.3f})'
-                        )
                         
                         # Reset view to fit all geometries
                         if total_voxels > 0 and first_update:
@@ -258,17 +319,33 @@ class VoxelViewerNode(Node):
     
     def add_legend(self):
         """Add legend to visualization."""
-        # Create simple spheres as legend with semi-transparent appearance
+        # Create legend for all states
+        # Occupied only (blue)
+        legend_occupied = o3d.geometry.TriangleMesh.create_sphere(radius=0.05)
+        legend_occupied.compute_vertex_normals()
+        legend_occupied.paint_uniform_color([0.0, 0.0, 0.7])  # Blue
+        legend_occupied.translate([0, 0, 2.7])
+        
+        # Pattern only (purple)
+        legend_pattern = o3d.geometry.TriangleMesh.create_sphere(radius=0.05)
+        legend_pattern.compute_vertex_normals()
+        legend_pattern.paint_uniform_color([0.5, 0.0, 0.7])  # Purple
+        legend_pattern.translate([0, 0, 2.5])
+        
+        # Match (green)
         legend_match = o3d.geometry.TriangleMesh.create_sphere(radius=0.05)
         legend_match.compute_vertex_normals()
-        legend_match.paint_uniform_color([0.0, 0.6, 0.0])  # Darker green (simulated transparency)
-        legend_match.translate([0, 0, 2.5])
+        legend_match.paint_uniform_color([0.0, 0.6, 0.0])  # Darker green
+        legend_match.translate([0, 0, 2.3])
         
+        # Mismatch (red)
         legend_mismatch = o3d.geometry.TriangleMesh.create_sphere(radius=0.05)
         legend_mismatch.compute_vertex_normals()
-        legend_mismatch.paint_uniform_color([0.6, 0.0, 0.0])  # Darker red (simulated transparency)
-        legend_mismatch.translate([0, 0, 2.3])
+        legend_mismatch.paint_uniform_color([0.6, 0.0, 0.0])  # Darker red
+        legend_mismatch.translate([0, 0, 2.1])
         
+        self.vis.add_geometry(legend_occupied)
+        self.vis.add_geometry(legend_pattern)
         self.vis.add_geometry(legend_match)
         self.vis.add_geometry(legend_mismatch)
 
