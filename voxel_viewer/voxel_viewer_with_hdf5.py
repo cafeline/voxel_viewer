@@ -684,17 +684,26 @@ class VoxelViewerWithHDF5Node(Node):
         """PythonのOpen3D rendering API（妥協実装）経路。
 
         現行のlegacy Visualizerとは描画バックエンドが異なるため、ここでは
-        InstancedRendererでインスタンス情報を生成し、フォールバックとして
-        点群描画（同一ウィンドウ）を行う。将来的にO3DVisualizer / Open3DScene
-        への切替を行う際は、この関数を差し替える。
+        InstancedRendererでインスタンス情報を生成し、SceneRenderer(Open3D
+        rendering/Scene) に点群として渡す。また、運用上の視認性確保のため
+        既存ウィンドウにも点群フォールバックを描画する。
         """
-        # 生成のみ（テスト用）
+        # 生成
         self.ensure_instanced()
         if self.instanced is None:
             self.update_cubes(cube_sets, voxel_size)
             return
-        self.instanced.build_instances(cube_sets, voxel_size)
-        # 暫定: 既存ウィンドウに点で表示
+        T, C = self.instanced.build_instances(cube_sets, voxel_size)
+        try:
+            from .scene_renderer import SceneRenderer
+            if not hasattr(self, '_scene_renderer') or self._scene_renderer is None:
+                self._scene_renderer = SceneRenderer()
+            centers = T[:, :3, 3] if T is not None and len(T) > 0 else np.zeros((0,3))
+            self._scene_renderer.update_points(centers, C if C is not None else np.zeros((0,3)))
+        except Exception:
+            # SceneRendererが使えない場合も安全に継続
+            pass
+        # 既存ウィンドウにも点で描画（視認性確保）
         self.instanced.draw_as_points()
 
 
