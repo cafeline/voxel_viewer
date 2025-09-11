@@ -110,7 +110,7 @@ class VoxelViewerWithHDF5Node(Node):
                     self.start_two_file_polling()
                 # If both voxel sizes are available, ensure they match
                 if (self.file_voxel_size is not None) and (self.raw_file_voxel_size is not None):
-                    if not validate_voxel_sizes(self.file_voxel_size, self.raw_file_voxel_size, tol=1e-9):
+                    if not validate_voxel_sizes(self.file_voxel_size, self.raw_file_voxel_size, atol=1e-9):
                         self.get_logger().error(
                             f'Voxel size mismatch between files: compressed={self.file_voxel_size} raw={self.raw_file_voxel_size}'
                         )
@@ -463,13 +463,11 @@ class VoxelViewerWithHDF5Node(Node):
                 if self.update_flag:
                     self.update_comparison_visualization()
                     self.update_flag = False
-            
-            self.vis.poll_events()
-            self.vis.update_renderer()
-            
-            # Check if window is closed
+
+            # Single poll per frame
             if not self.vis.poll_events():
                 break
+            self.vis.update_renderer()
         
         self.vis.destroy_window()
 
@@ -492,7 +490,7 @@ class VoxelViewerWithHDF5Node(Node):
                 return
         # Choose comparison voxel size (must be equal; prefer raw when present)
         if (self.file_voxel_size is not None) and (self.raw_file_voxel_size is not None):
-            if not validate_voxel_sizes(self.file_voxel_size, self.raw_file_voxel_size, tol=1e-9):
+            if not validate_voxel_sizes(self.file_voxel_size, self.raw_file_voxel_size, atol=1e-9):
                 self.get_logger().error(
                     f'Voxel size mismatch between files: compressed={self.file_voxel_size} raw={self.raw_file_voxel_size}'
                 )

@@ -154,8 +154,8 @@ class MarkerToOpen3D:
         Returns:
             o3d.geometry.VoxelGrid object
         """
-        # First convert to point cloud
-        pcd = self.marker_array_to_pointcloud(marker_array)
+        # First convert to point cloud (ignore returned scale)
+        pcd, _ = self.marker_array_to_pointcloud(marker_array)
         
         # Create voxel grid from point cloud
         voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(

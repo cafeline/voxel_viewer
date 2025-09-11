@@ -32,36 +32,77 @@ def compute_two_file_diff(
     - file-only: red [1,0,0]
     - raw-only: green [0,1,0]
     """
-    f1 = round_points_to_voxel(file_pts, voxel_size, origin)
-    f2 = round_points_to_voxel(raw_pts, voxel_size, origin)
-    set1 = set(map(tuple, f1))
-    set2 = set(map(tuple, f2))
-    common = set1 & set2
-    only_f1 = set1 - set2
-    only_f2 = set2 - set1
+    # Quantize to integer cell indices to avoid float set/tuple issues
+    o = np.zeros(3, dtype=np.float64) if origin is None else np.asarray(origin, dtype=np.float64).reshape(3)
+    def to_cells(pts):
+        if pts is None or len(pts) == 0:
+            return np.zeros((0, 3), dtype=np.int32)
+        p = np.asarray(pts, dtype=np.float64)
+        return np.floor((p - o) / voxel_size).astype(np.int32)
+
+    c1 = to_cells(file_pts)
+    c2 = to_cells(raw_pts)
+
+    # Unique rows
+    def unique_rows(a):
+        if a.size == 0:
+            return a
+        a_view = np.ascontiguousarray(a).view(np.dtype((np.void, a.dtype.itemsize * a.shape[1])))
+        _, idx = np.unique(a_view, return_index=True)
+        return a[idx]
+
+    u1 = unique_rows(c1)
+    u2 = unique_rows(c2)
+
+    # Set-like ops via concatenation + flags
+    def diff_and_intersection(a, b):
+        if a.size == 0 and b.size == 0:
+            return (np.zeros((0,3), dtype=np.int32), np.zeros((0,3), dtype=np.int32), np.zeros((0,3), dtype=np.int32))
+        if a.size == 0:
+            return (np.zeros((0,3), dtype=np.int32), np.zeros((0,3), dtype=np.int32), b)
+        if b.size == 0:
+            return (a, np.zeros((0,3), dtype=np.int32), np.zeros((0,3), dtype=np.int32))
+        ab = np.vstack([a, b])
+        ab_view = np.ascontiguousarray(ab).view(np.dtype((np.void, ab.dtype.itemsize * ab.shape[1])))
+        uniq, inv, counts = np.unique(ab_view, return_inverse=True, return_counts=True)
+        # indices mapping: [0..len(a)-1] -> a, [len(a)..] -> b
+        is_from_a = np.arange(len(ab)) < len(a)
+        only_a_mask = (counts[inv] == 1) & is_from_a
+        only_b_mask = (counts[inv] == 1) & (~is_from_a)
+        common_mask = (counts[inv] > 1)
+        return ab[only_a_mask], ab[only_b_mask], ab[common_mask]
+
+    only1_cells, only2_cells, common_cells = diff_and_intersection(u1, u2)
+
+    # Map back to world centers (lower corner + 0.5 voxel)
+    def cells_to_centers(cells):
+        if cells.size == 0:
+            return np.zeros((0,3), dtype=np.float64)
+        return o + (cells.astype(np.float64) + 0.5) * voxel_size
+
+    only1 = cells_to_centers(only1_cells)
+    only2 = cells_to_centers(only2_cells)
+    common = cells_to_centers(common_cells)
 
     pts = []
     cols = []
-    for p in common:
-        pts.append(p)
-        cols.append([1.0, 1.0, 1.0])
-    for p in only_f1:
-        pts.append(p)
-        cols.append([1.0, 0.0, 0.0])
-    for p in only_f2:
-        pts.append(p)
-        cols.append([0.0, 1.0, 0.0])
-
+    if common.size:
+        pts.append(common); cols.append(np.tile([1.0,1.0,1.0], (len(common),1)))
+    if only1.size:
+        pts.append(only1); cols.append(np.tile([1.0,0.0,0.0], (len(only1),1)))
+    if only2.size:
+        pts.append(only2); cols.append(np.tile([0.0,1.0,0.0], (len(only2),1)))
     if pts:
-        return np.array(pts, dtype=np.float64), np.array(cols, dtype=np.float64)
-    return np.zeros((0, 3)), np.zeros((0, 3))
+        return np.vstack(pts), np.vstack(cols)
+    return np.zeros((0,3)), np.zeros((0,3))
 
 
-def validate_voxel_sizes(v1: float, v2: float, tol: float = 1e-9) -> bool:
-    """Return True if two voxel sizes are equal within tolerance."""
+def validate_voxel_sizes(v1: float, v2: float, atol: float = 1e-7, rtol: float = 1e-6) -> bool:
+    """Return True if two voxel sizes are equal within absolute/relative tolerance."""
     try:
         if v1 is None or v2 is None:
             return False
-        return abs(float(v1) - float(v2)) <= tol
+        a = float(v1); b = float(v2)
+        return abs(a - b) <= max(atol, rtol * max(abs(a), abs(b)))
     except Exception:
         return False

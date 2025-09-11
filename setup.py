@@ -31,7 +31,8 @@ setup(
     entry_points={
         'console_scripts': [
             'voxel_viewer = voxel_viewer.voxel_viewer:main',
-            'optimized_voxel_viewer = voxel_viewer.optimized_voxel_viewer:main',
+            # Keep backward-compatible name and correct target
+            'optimized_voxel_viewer = voxel_viewer.voxel_viewer_optimized:main',
             'voxel_viewer_optimized = voxel_viewer.voxel_viewer_optimized:main',
             'test_comparison = voxel_viewer.test_comparison:main',
             'voxel_viewer_with_hdf5 = voxel_viewer.voxel_viewer_with_hdf5:main'
