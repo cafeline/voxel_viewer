@@ -10,6 +10,7 @@ import threading
 from .marker_to_open3d import MarkerToOpen3D
 from .hdf5_reader import HDF5CompressedMapReader
 from .file_compare import compute_two_file_diff, validate_voxel_sizes
+from .mode_utils import should_load_files, is_file_mode, is_topic_mode
 
 
 class VoxelViewerWithHDF5Node(Node):
@@ -92,9 +93,9 @@ class VoxelViewerWithHDF5Node(Node):
         self.file_load_timer = None  # periodic retry for two-file mode
         
         # Mode-specific initialization
-        self.two_file_comparison = (self.mode == 'file_comparison' and bool(self.raw_hdf5_file))
+        self.two_file_comparison = (is_file_mode(self.mode) and bool(self.raw_hdf5_file))
 
-        if self.mode == 'file_comparison':
+        if is_file_mode(self.mode):
             if self.two_file_comparison:
                 # Compare compressed vs raw HDF5 files
                 if not self.hdf5_file or not self.raw_hdf5_file:
@@ -140,7 +141,7 @@ class VoxelViewerWithHDF5Node(Node):
         )
         
         self.get_logger().info(f'VoxelViewer with HDF5 initialized in {self.mode} mode')
-        if self.mode == 'file_comparison':
+        if is_file_mode(self.mode):
             if self.two_file_comparison:
                 self.get_logger().info(f'Comparing files: compressed={self.hdf5_file}, raw={self.raw_hdf5_file}')
             else:
@@ -150,6 +151,9 @@ class VoxelViewerWithHDF5Node(Node):
     def load_hdf5_file(self):
         """Load and decompress HDF5 file."""
         import os
+        # Disallow file access unless in file_comparison mode
+        if not should_load_files(self.mode):
+            return
         if self._compressed_loaded_once:
             return
         
@@ -230,6 +234,8 @@ class VoxelViewerWithHDF5Node(Node):
     def load_two_hdf5_files(self):
         """Load and decompress compressed and raw HDF5 files for file-vs-file comparison."""
         import os
+        if not should_load_files(self.mode):
+            return
         try:
             # Load compressed file
             if (not self._compressed_loaded_once) and os.path.exists(self.hdf5_file):
@@ -304,6 +310,8 @@ class VoxelViewerWithHDF5Node(Node):
 
     def start_two_file_polling(self):
         """Create a short-period timer to retry loading both files until available, then draw and stop."""
+        if not should_load_files(self.mode):
+            return
         if self.file_load_timer is not None:
             return
         # Poll every 0.5s until both datasets are present
@@ -312,6 +320,8 @@ class VoxelViewerWithHDF5Node(Node):
 
     def poll_two_files_once(self):
         """Timer callback to attempt file-to-file load and initial draw once both files are ready."""
+        if not should_load_files(self.mode):
+            return
         try:
             # Attempt to (re)load files
             self.load_two_hdf5_files()
@@ -465,7 +475,7 @@ class VoxelViewerWithHDF5Node(Node):
 
     def update_comparison_visualization(self):
         """Update comparison visualization based on mode."""
-        if self.mode == 'file_comparison':
+        if is_file_mode(self.mode):
             if self.two_file_comparison:
                 self.update_two_file_comparison()
             else:
@@ -659,7 +669,7 @@ class VoxelViewerWithHDF5Node(Node):
         only_pattern = pattern_set - occupied_set
         
         if len(common) + len(only_occupied) + len(only_pattern) > 0:
-            if self.render_style == 'cubes':
+            if str(self.render_style).lower() == 'cubes':
                 cube_sets = []
                 if len(common) > 0:
                     cube_sets.append((np.array(list(common)), [1.0, 1.0, 1.0]))  # white
@@ -668,6 +678,7 @@ class VoxelViewerWithHDF5Node(Node):
                 if len(only_pattern) > 0:
                     cube_sets.append((np.array(list(only_pattern)), [0.0, 0.0, 1.0]))  # blue
                 self.update_cubes(cube_sets, self.current_voxel_size)
+                total = len(common) + len(only_occupied) + len(only_pattern)
             else:
                 all_points = []
                 all_colors = []
@@ -681,9 +692,9 @@ class VoxelViewerWithHDF5Node(Node):
                     all_points.append(p)
                     all_colors.append([0, 0, 1])
                 self.update_points(np.array(all_points), np.array(all_colors))
+                total = len(all_points)
             
             # Log statistics
-            total = len(all_points)
             self.get_logger().info(
                 f'Topic comparison - Common: {len(common)} (white), '
                 f'Only occupied: {len(only_occupied)} (red), '
