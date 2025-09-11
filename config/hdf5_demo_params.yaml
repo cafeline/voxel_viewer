@@ -21,15 +21,6 @@ pointcloud_compressor_node:
 # Voxel Viewer With HDF5 Parameters
 voxel_viewer_with_hdf5:
   ros__parameters:
-    mode: "file_comparison"   # or "topic_comparison"
+    mode: "topic_comparison"   # or "topic_comparison"
     hdf5_file: "/tmp/compressed_map.h5"
     raw_hdf5_file: "/tmp/raw_voxel_grid.h5"
-    # Display uses HDF5 voxel_size by default; keep points constant size (pixels)
-    force_display_voxel_size: false
-    display_voxel_size: 1.1
-    render_style: "cubes"      # 'cubes' to emulate RViz CUBE_LIST, 'points' for point cloud
-    cube_scale: 1.0            # world size = cube_scale * voxel_size
-    point_size: 5.0
-    background_color: [0.1, 0.1, 0.1]
-    show_axes: true
-    tolerance: 0.001
