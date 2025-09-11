@@ -1,0 +1,31 @@
+# HDF5 Demo Configuration
+
+# PointCloud Compressor Node Parameters
+pointcloud_compressor_node:
+  ros__parameters:
+    # Input/Output settings
+    input_file: "/home/ryo/tsudanuma/maps/tsudanuma-challenge-all.ply"
+    voxel_size: 1.1
+    block_size: 8
+    min_points_threshold: 5
+
+    # Publishing / saving
+    publish_once: true
+    publish_occupied_voxel_markers: true
+    save_hdf5: true
+    hdf5_output_file: "/tmp/compressed_map.h5"
+
+# Voxel Viewer With HDF5 Parameters
+voxel_viewer_with_hdf5:
+  ros__parameters:
+    mode: "file_comparison"   # or "topic_comparison"
+    hdf5_file: "/tmp/compressed_map.h5"
+    # Display uses HDF5 voxel_size by default; keep points constant size (pixels)
+    force_display_voxel_size: false
+    display_voxel_size: 5.1
+    render_style: "cubes"      # 'cubes' to emulate RViz CUBE_LIST, 'points' for point cloud
+    cube_scale: 1.0            # world size = cube_scale * voxel_size
+    point_size: 5.0
+    background_color: [0.1, 0.1, 0.1]
+    show_axes: true
+    tolerance: 0.001

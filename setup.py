@@ -13,10 +13,15 @@ setup(
         ('share/' + package_name + '/launch', [
             'launch/voxel_viewer.launch.py',
             'launch/demo_with_decompressed.launch.py',
-            'launch/optimized_viewer_launch.py'
+            'launch/optimized_viewer_launch.py',
+            'launch/hdf5_demo.launch.py'
+        ]),
+        ('share/' + package_name + '/config', [
+            'config/voxel_viewer_params.yaml',
+            'config/hdf5_demo_params.yaml'
         ]),
     ],
-    install_requires=['setuptools', 'open3d', 'numpy'],
+    install_requires=['setuptools', 'open3d', 'numpy', 'h5py'],
     zip_safe=True,
     maintainer='ryo',
     maintainer_email='s24s1040du@s.chibakoudai.jp',
@@ -28,7 +33,8 @@ setup(
             'voxel_viewer = voxel_viewer.voxel_viewer:main',
             'optimized_voxel_viewer = voxel_viewer.optimized_voxel_viewer:main',
             'voxel_viewer_optimized = voxel_viewer.voxel_viewer_optimized:main',
-            'test_comparison = voxel_viewer.test_comparison:main'
+            'test_comparison = voxel_viewer.test_comparison:main',
+            'voxel_viewer_with_hdf5 = voxel_viewer.voxel_viewer_with_hdf5:main'
         ],
     },
 )

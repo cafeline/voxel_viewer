@@ -1,0 +1,48 @@
+# Voxel Viewer Configuration
+
+# Viewer mode selection
+# Options: 'topic_comparison', 'file_comparison'
+# - topic_comparison: Compare /occupied_voxel_markers with /pattern_markers topics
+# - file_comparison: Compare /occupied_voxel_markers with HDF5 file data
+viewer_mode: file_comparison
+
+# HDF5 file configuration (used when viewer_mode is 'file_comparison')
+hdf5_config:
+  # Path to the HDF5 compressed map file
+  file_path: "/tmp/compressed_map.h5"
+
+# Visualization settings
+visualization:
+  # Size of points in the visualization
+  point_size: 5.0
+  
+  # Background color (RGB values 0-1)
+  background_color: [0.1, 0.1, 0.1]
+  
+  # Show coordinate axes
+  show_axes: true
+  
+  # Voxel size for point rounding (meters)
+  voxel_size: 0.1
+  
+  # Tolerance for point matching (meters)
+  tolerance: 0.001
+
+# Color coding for comparison visualization
+colors:
+  # Common points (exist in both sources)
+  common: [1.0, 1.0, 1.0]  # White
+  
+  # Points only in occupied_voxel_markers topic
+  only_occupied: [1.0, 0.0, 0.0]  # Red
+  
+  # Points only in pattern_markers topic (topic_comparison mode)
+  only_pattern: [0.0, 0.0, 1.0]  # Blue
+  
+  # Points only in HDF5 file (file_comparison mode)
+  only_file: [0.0, 1.0, 0.0]  # Green
+
+# ROS2 settings
+ros:
+  # Use simulation time
+  use_sim_time: false
