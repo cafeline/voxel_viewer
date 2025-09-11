@@ -9,7 +9,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     """Generate launch description for HDF5 demo."""
-    
+
     # Default config file
     pkg_share = get_package_share_directory('voxel_viewer')
     default_config = os.path.join(pkg_share, 'config', 'hdf5_demo_params.yaml')
@@ -25,42 +25,34 @@ def generate_launch_description():
         default_value='/home/ryo/tsudanuma/maps/tsudanuma-challenge-all.ply',
         description='Input point cloud file (PLY or PCD)'
     )
-    
+
     voxel_size_arg = DeclareLaunchArgument(
         'voxel_size',
         default_value='5.1',
         description='Voxel size for compression'
     )
-    
+
     hdf5_file_arg = DeclareLaunchArgument(
         'hdf5_file',
         default_value='/tmp/compressed_map.h5',
         description='Output HDF5 file path'
     )
-    
+
     viewer_mode_arg = DeclareLaunchArgument(
         'viewer_mode',
         default_value='file_comparison',
         description='Viewer mode: topic_comparison or file_comparison'
     )
-    
+
     # PointCloud Compressor Node
     compressor_node = Node(
         package='pointcloud_compressor',
         executable='pointcloud_compressor_node',
         name='pointcloud_compressor_node',
         output='screen',
-        parameters=[
-            LaunchConfiguration('config_file'),
-            {
-                # Allow overriding via launch args if provided
-                'input_file': LaunchConfiguration('input_file'),
-                'voxel_size': LaunchConfiguration('voxel_size'),
-                'hdf5_output_file': LaunchConfiguration('hdf5_file')
-            }
-        ]
+        parameters=[LaunchConfiguration('config_file')]
     )
-    
+
     # Voxel Viewer with HDF5 support
     viewer_node = Node(
         package='voxel_viewer',
@@ -77,23 +69,14 @@ def generate_launch_description():
             }
         ]
     )
-    
-    # Log information
-    log_info = LogInfo(
-        msg=['Launching HDF5 demo with:\n',
-             '  Input file: ', LaunchConfiguration('input_file'), '\n',
-             '  Voxel size: ', LaunchConfiguration('voxel_size'), '\n',
-             '  HDF5 file: ', LaunchConfiguration('hdf5_file'), '\n',
-             '  Viewer mode: ', LaunchConfiguration('viewer_mode')]
-    )
-    
+
+
     return LaunchDescription([
         config_file_arg,
         input_file_arg,
         voxel_size_arg,
         hdf5_file_arg,
         viewer_mode_arg,
-        log_info,
         compressor_node,
         viewer_node
     ])

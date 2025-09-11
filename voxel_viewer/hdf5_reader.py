@@ -33,7 +33,8 @@ class HDF5CompressedMapReader:
                     'compression_params': self._read_compression_params(f),
                     'dictionary': self._read_dictionary(f),
                     'compressed_data': self._read_compressed_data(f),
-                    'statistics': self._read_statistics(f)
+                    'statistics': self._read_statistics(f),
+                    'raw': self._read_raw_voxel_grid(f)
                 }
             return True
         except Exception as e:
@@ -90,6 +91,21 @@ class HDF5CompressedMapReader:
             if 'point_count' in group:
                 compressed['point_count'] = group['point_count'][()]
         return compressed
+
+    def _read_raw_voxel_grid(self, f: h5py.File) -> Dict[str, Any]:
+        """Read raw voxel grid (pre-compression) if present."""
+        raw = {}
+        if 'raw_voxel_grid' in f:
+            group = f['raw_voxel_grid']
+            if 'dimensions' in group:
+                raw['dimensions'] = group['dimensions'][()]
+            if 'voxel_size' in group:
+                raw['voxel_size'] = group['voxel_size'][()]
+            if 'origin' in group:
+                raw['origin'] = group['origin'][()]
+            if 'occupied_voxels' in group:
+                raw['occupied_voxels'] = group['occupied_voxels'][:]
+        return raw
     
     def _read_statistics(self, f: h5py.File) -> Dict[str, Any]:
         """Read statistics from HDF5 file."""
@@ -117,9 +133,23 @@ class HDF5CompressedMapReader:
         if self.data is None:
             raise ValueError("No data loaded. Call read() first.")
         
-        params = self.data['compression_params']
-        compressed = self.data['compressed_data']
-        dictionary = self.data['dictionary']
+        params = self.data.get('compression_params', {})
+        compressed = self.data.get('compressed_data', {})
+        dictionary = self.data.get('dictionary', {})
+        raw = self.data.get('raw', {})
+
+        # If raw voxel grid present, use it to generate points
+        if raw and 'occupied_voxels' in raw and raw['occupied_voxels'].size > 0:
+            voxel_size = raw.get('voxel_size', 0.1)
+            if isinstance(voxel_size, np.ndarray):
+                voxel_size = float(voxel_size.squeeze())
+            origin = raw.get('origin', np.array([0.0, 0.0, 0.0], dtype=np.float32))
+            origin = np.array(origin, dtype=np.float64).reshape(3)
+            occ = raw['occupied_voxels']  # Nx3 int32
+            occ = occ.astype(np.float64)
+            centers = origin + (occ + 0.5) * voxel_size
+            self.decompressed_points = centers
+            return self.decompressed_points
         
         # Extract scalar values from numpy arrays if needed
         voxel_size = params.get('voxel_size', 0.1)
