@@ -30,6 +30,9 @@ class VoxelViewerWithHDF5Node(Node):
         self.mode = self.get_parameter('mode').value
         self.hdf5_file = self.get_parameter('hdf5_file').value
         self.raw_hdf5_file = self.get_parameter('raw_hdf5_file').value
+        # Rendering backend: 'cubes' (default) or 'instanced'
+        self.declare_parameter('render_mode', 'cubes')
+        self.render_mode = self.get_parameter('render_mode').value
         # Fixed viewer constants
         self.background_color = [0.1, 0.1, 0.1]
         self.show_axes = True
@@ -72,6 +75,7 @@ class VoxelViewerWithHDF5Node(Node):
         self.update_flag = False
         self.lock = threading.Lock()
         self.file_load_timer = None  # periodic retry for two-file mode
+        self.instanced = None  # lazy init of InstancedRenderer
         
         # Mode-specific initialization
         self.two_file_comparison = (is_file_mode(self.mode) and bool(self.raw_hdf5_file))
@@ -304,7 +308,7 @@ class VoxelViewerWithHDF5Node(Node):
                     if len(greens) > 0:
                         cube_sets.append((greens, [0.0, 1.0, 0.0]))
                     comp_voxel = self.raw_file_voxel_size if self.raw_file_voxel_size else (self.file_voxel_size if self.file_voxel_size else 1.0)
-                    self.update_cubes(cube_sets, comp_voxel)
+                    self.update_render(cube_sets, comp_voxel)
                     self.get_logger().info(f'Initial file-to-file draw (cubes): {len(pts)} centers')
                     if not self.view_reset_done:
                         self.vis.reset_view_point(True)
@@ -397,7 +401,7 @@ class VoxelViewerWithHDF5Node(Node):
                     if len(greens) > 0:
                         cube_sets.append((greens, [0.0, 1.0, 0.0]))
                     vox = self.raw_file_voxel_size or self.file_voxel_size or 1.0
-                    self.update_cubes(cube_sets, vox)
+                    self.update_render(cube_sets, vox)
                     self.vis.reset_view_point(True)
             except Exception as ex:
                 self.get_logger().error(f'Initial two-file draw failed: {ex}')
@@ -456,7 +460,7 @@ class VoxelViewerWithHDF5Node(Node):
             cube_sets.append((reds, [1.0, 0.0, 0.0]))
         if len(greens) > 0:
             cube_sets.append((greens, [0.0, 1.0, 0.0]))
-        self.update_cubes(cube_sets, comp_voxel)
+        self.update_render(cube_sets, comp_voxel)
         bmin = pts_array.min(axis=0)
         bmax = pts_array.max(axis=0)
         whites_n = (cols_array == np.array([1.0, 1.0, 1.0])).all(axis=1).sum()
@@ -512,7 +516,7 @@ class VoxelViewerWithHDF5Node(Node):
             occupied_rounded = self.round_points(self.occupied_points, self.current_voxel_size)
             if len(occupied_rounded) == 0:
                 return
-            self.update_cubes([
+            self.update_render([
                 (np.array(occupied_rounded), [1.0, 0.0, 0.0])  # red
             ], self.file_voxel_size or self.current_voxel_size)
             self.get_logger().info(f'HDF5 file not loaded yet, showing {len(occupied_rounded)} occupied voxels only')
@@ -543,7 +547,7 @@ class VoxelViewerWithHDF5Node(Node):
                 cube_sets.append((only_occ_arr, [1.0, 0.0, 0.0]))
             if only_file_arr.size:
                 cube_sets.append((only_file_arr, [0.0, 1.0, 0.0]))
-            self.update_cubes(cube_sets, comparison_voxel_size)
+            self.update_render(cube_sets, comparison_voxel_size)
             points_array = np.vstack([a for a in [common_arr, only_occ_arr, only_file_arr] if a.size > 0]) if (len(common)+len(only_occupied)+len(only_file)) > 0 else np.zeros((0,3))
             
             # Log statistics and bounds
@@ -582,7 +586,7 @@ class VoxelViewerWithHDF5Node(Node):
                 cube_sets.append((np.array(list(only_occupied)), [1.0, 0.0, 0.0]))  # red
             if len(only_pattern) > 0:
                 cube_sets.append((np.array(list(only_pattern)), [0.0, 0.0, 1.0]))  # blue
-            self.update_cubes(cube_sets, self.current_voxel_size)
+            self.update_render(cube_sets, self.current_voxel_size)
             total = len(common) + len(only_occupied) + len(only_pattern)
             
             # Log statistics
@@ -646,6 +650,33 @@ class VoxelViewerWithHDF5Node(Node):
         if not self.view_reset_done and len(self.current_geometries) > 0:
             self.vis.reset_view_point(True)
             self.view_reset_done = True
+
+    # --- Instanced (logical) rendering ---
+    def ensure_instanced(self):
+        if self.instanced is None:
+            try:
+                from .instanced_renderer import InstancedRenderer
+                self.instanced = InstancedRenderer(self.vis)
+            except Exception as e:
+                self.get_logger().error(f'Failed to init InstancedRenderer: {e}')
+                self.instanced = None
+
+    def update_instanced(self, cube_sets: list, voxel_size: float):
+        """色付きインスタンス（フォールバックはポイント描画）。"""
+        self.ensure_instanced()
+        if self.instanced is None:
+            # safe fallback
+            self.update_cubes(cube_sets, voxel_size)
+            return
+        self.instanced.build_instances(cube_sets, voxel_size)
+        # 現状はPointCloudにフォールバック
+        self.instanced.draw_as_points()
+
+    def update_render(self, cube_sets: list, voxel_size: float):
+        if self.render_mode == 'instanced':
+            self.update_instanced(cube_sets, voxel_size)
+        else:
+            self.update_cubes(cube_sets, voxel_size)
 
 
 def main(args=None):
