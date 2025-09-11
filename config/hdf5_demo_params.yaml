@@ -21,7 +21,7 @@ pointcloud_compressor_node:
 # Voxel Viewer With HDF5 Parameters
 voxel_viewer_with_hdf5:
   ros__parameters:
-    mode: "topic_comparison"   # or "topic_comparison"
+    mode: "file_comparison"   # or "topic_comparison"
     hdf5_file: "/tmp/compressed_map.h5"
     raw_hdf5_file: "/tmp/raw_voxel_grid.h5"
     # Display uses HDF5 voxel_size by default; keep points constant size (pixels)

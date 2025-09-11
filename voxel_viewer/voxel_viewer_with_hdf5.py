@@ -9,7 +9,8 @@ import numpy as np
 import threading
 from .marker_to_open3d import MarkerToOpen3D
 from .hdf5_reader import HDF5CompressedMapReader
-from .file_compare import compute_two_file_diff, validate_voxel_sizes
+from .file_compare import compute_two_file_diff, validate_voxel_sizes, compute_diff_common_only
+from .mesh_utils import build_cubes_as_arrays
 from .mode_utils import should_load_files, is_file_mode, is_topic_mode
 
 
@@ -501,19 +502,18 @@ class VoxelViewerWithHDF5Node(Node):
         total = len(pts_array)
         if total == 0:
             return
-        if self.render_style == 'cubes':
-            # Derive cube sets by color
-            whites = pts_array[(cols_array == np.array([1.0, 1.0, 1.0])).all(axis=1)]
-            reds = pts_array[(cols_array == np.array([1.0, 0.0, 0.0])).all(axis=1)]
-            greens = pts_array[(cols_array == np.array([0.0, 1.0, 0.0])).all(axis=1)]
-            cube_sets = []
-            if len(whites) > 0:
-                cube_sets.append((whites, [1.0, 1.0, 1.0]))
-            if len(reds) > 0:
-                cube_sets.append((reds, [1.0, 0.0, 0.0]))
-            if len(greens) > 0:
-                cube_sets.append((greens, [0.0, 1.0, 0.0]))
-            self.update_cubes(cube_sets, comp_voxel)
+            if self.render_style == 'cubes':
+                whites = pts_array[(cols_array == np.array([1.0, 1.0, 1.0])).all(axis=1)]
+                reds = pts_array[(cols_array == np.array([1.0, 0.0, 0.0])).all(axis=1)]
+                greens = pts_array[(cols_array == np.array([0.0, 1.0, 0.0])).all(axis=1)]
+                cube_sets = []
+                if len(whites) > 0:
+                    cube_sets.append((whites, [1.0, 1.0, 1.0]))
+                if len(reds) > 0:
+                    cube_sets.append((reds, [1.0, 0.0, 0.0]))
+                if len(greens) > 0:
+                    cube_sets.append((greens, [0.0, 1.0, 0.0]))
+                self.update_cubes(cube_sets, comp_voxel)
         else:
             self.update_points(pts_array, cols_array)
         bmin = pts_array.min(axis=0)
@@ -582,41 +582,32 @@ class VoxelViewerWithHDF5Node(Node):
             self.get_logger().info(f'HDF5 file not loaded yet, showing {len(occupied_rounded)} occupied voxels only')
             return
         
-        # Round points for comparison
-        # Always use HDF5 voxel size for comparison if available
+        # Integer-grid comparison: use file voxel size and file origin for both sources
         comparison_voxel_size = self.file_voxel_size if self.file_voxel_size else self.current_voxel_size
-        occupied_rounded = self.round_points(self.occupied_points, comparison_voxel_size)
-        file_rounded = self.round_points(self.file_points, comparison_voxel_size)
+        common, only_occ, only_file = compute_diff_common_only(
+            self.occupied_points, self.file_points, comparison_voxel_size, origin=self.grid_origin
+        )
         
         self.get_logger().info(f'Comparing with voxel size: {comparison_voxel_size} '
                               f'(occupied: {self.current_voxel_size}, file: {self.file_voxel_size})')
         
         # Find common and unique points
-        occupied_set = set(map(tuple, occupied_rounded))
-        file_set = set(map(tuple, file_rounded))
-        
-        common = occupied_set & file_set
-        only_occupied = occupied_set - file_set
-        only_file = file_set - occupied_set
+        only_occupied = set(map(tuple, only_occ))
+        only_file = set(map(tuple, only_file))
+        common = set(map(tuple, common))
         
         if len(common) + len(only_occupied) + len(only_file) > 0:
             if self.render_style == 'cubes':
+                common_arr = np.array(list(common)) if len(common) else np.zeros((0,3))
+                only_occ_arr = np.array(list(only_occupied)) if len(only_occupied) else np.zeros((0,3))
+                only_file_arr = np.array(list(only_file)) if len(only_file) else np.zeros((0,3))
                 cube_sets = []
-                if len(common) > 0:
-                    common_arr = np.array(list(common))
-                    cube_sets.append((common_arr, [1.0, 1.0, 1.0]))  # white
-                else:
-                    common_arr = np.zeros((0, 3))
-                if len(only_occupied) > 0:
-                    only_occ_arr = np.array(list(only_occupied))
-                    cube_sets.append((only_occ_arr, [1.0, 0.0, 0.0]))  # red
-                else:
-                    only_occ_arr = np.zeros((0, 3))
-                if len(only_file) > 0:
-                    only_file_arr = np.array(list(only_file))
-                    cube_sets.append((only_file_arr, [0.0, 1.0, 0.0]))  # green
-                else:
-                    only_file_arr = np.zeros((0, 3))
+                if common_arr.size:
+                    cube_sets.append((common_arr, [1.0, 1.0, 1.0]))
+                if only_occ_arr.size:
+                    cube_sets.append((only_occ_arr, [1.0, 0.0, 0.0]))
+                if only_file_arr.size:
+                    cube_sets.append((only_file_arr, [0.0, 1.0, 0.0]))
                 self.update_cubes(cube_sets, comparison_voxel_size)
                 points_array = np.vstack([a for a in [common_arr, only_occ_arr, only_file_arr] if a.size > 0]) if (len(common)+len(only_occupied)+len(only_file)) > 0 else np.zeros((0,3))
             else:
@@ -654,17 +645,13 @@ class VoxelViewerWithHDF5Node(Node):
         if not self.occupied_received or not self.pattern_received:
             return
         
-        # Round points for comparison
-        occupied_rounded = self.round_points(self.occupied_points, self.current_voxel_size)
-        pattern_rounded = self.round_points(self.pattern_points, self.current_voxel_size)
-        
-        # Find common and unique points
-        occupied_set = set(map(tuple, occupied_rounded))
-        pattern_set = set(map(tuple, pattern_rounded))
-        
-        common = occupied_set & pattern_set
-        only_occupied = occupied_set - pattern_set
-        only_pattern = pattern_set - occupied_set
+        # Integer-grid comparison (topic vs topic) on current voxel + origin
+        a_common, a_only_occ, a_only_pat = compute_diff_common_only(
+            self.occupied_points, self.pattern_points, self.current_voxel_size, origin=self.grid_origin
+        )
+        common = set(map(tuple, a_common))
+        only_occupied = set(map(tuple, a_only_occ))
+        only_pattern = set(map(tuple, a_only_pat))
         
         if len(common) + len(only_occupied) + len(only_pattern) > 0:
             if str(self.render_style).lower() == 'cubes':
@@ -721,26 +708,21 @@ class VoxelViewerWithHDF5Node(Node):
     def build_cubes_mesh(self, centers: np.ndarray, voxel_size: float, color_rgb: list) -> o3d.geometry.TriangleMesh:
         """Build a single TriangleMesh containing cubes at given centers.
         The cube world size equals cube_scale * voxel_size.
+        Uses vectorized vertex/triangle assembly for performance.
         """
         size = float(self.cube_scale) * float(voxel_size)
-        mesh_total = o3d.geometry.TriangleMesh()
+        mesh = o3d.geometry.TriangleMesh()
         if centers.size == 0:
-            return mesh_total
-        # Centers provided by roundingは格子の角 (k * voxel_size) に揃っている。
-        # +0.5*voxel_sizeシフトで中心に配置し、隙間をなくす。
-        half = 0.5 * float(voxel_size)
-        for c in centers:
-            # Open3Dのメッシュは浅いコピーだと最後の平行移動で上書きされることがあるため、
-            # 各ボクセルごとに新規ボックスを生成して配置する。
-            cube = o3d.geometry.TriangleMesh.create_box(width=size, height=size, depth=size)
-            cube.compute_vertex_normals()
-            cx = float(c[0]) + half
-            cy = float(c[1]) + half
-            cz = float(c[2]) + half
-            cube.translate([cx - size/2.0, cy - size/2.0, cz - size/2.0])
-            mesh_total += cube
-        mesh_total.paint_uniform_color(color_rgb)
-        return mesh_total
+            return mesh
+        # centers provided are at lower corners; shift to centers (+0.5*voxel)
+        half_vox = 0.5 * float(voxel_size)
+        shifted = np.asarray(centers, dtype=np.float64) + half_vox
+        verts, tris = build_cubes_as_arrays(shifted, size)
+        mesh.vertices = o3d.utility.Vector3dVector(verts)
+        mesh.triangles = o3d.utility.Vector3iVector(tris)
+        mesh.compute_vertex_normals()
+        mesh.paint_uniform_color(color_rgb)
+        return mesh
 
     def update_cubes(self, cube_sets: list, voxel_size: float):
         """Update visualization by rendering colored cubes (RViz CUBE_LIST-like).

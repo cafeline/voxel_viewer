@@ -5,6 +5,12 @@ import numpy as np
 from typing import Tuple
 
 
+def _origin_array(origin):
+    if origin is None:
+        return np.zeros(3, dtype=np.float64)
+    return np.asarray(origin, dtype=np.float64).reshape(3)
+
+
 def round_points_to_voxel(points: np.ndarray, voxel_size: float, origin: np.ndarray = None) -> np.ndarray:
     if points is None or len(points) == 0:
         return np.zeros((0, 3))
@@ -14,7 +20,7 @@ def round_points_to_voxel(points: np.ndarray, voxel_size: float, origin: np.ndar
     if origin is None:
         # Use floor quantization to the voxel cell, avoiding banker's rounding collapse
         return np.floor(p / voxel_size) * voxel_size
-    o = np.asarray(origin, dtype=np.float64).reshape(3)
+    o = _origin_array(origin)
     # Quantize to the lower cell corner relative to origin
     return np.floor((p - o) / voxel_size) * voxel_size + o
 
@@ -33,7 +39,7 @@ def compute_two_file_diff(
     - raw-only: green [0,1,0]
     """
     # Quantize to integer cell indices to avoid float set/tuple issues
-    o = np.zeros(3, dtype=np.float64) if origin is None else np.asarray(origin, dtype=np.float64).reshape(3)
+    o = _origin_array(origin)
     def to_cells(pts):
         if pts is None or len(pts) == 0:
             return np.zeros((0, 3), dtype=np.int32)
@@ -95,6 +101,54 @@ def compute_two_file_diff(
     if pts:
         return np.vstack(pts), np.vstack(cols)
     return np.zeros((0,3)), np.zeros((0,3))
+
+
+def compute_diff_common_only(
+    pts_a: np.ndarray,
+    pts_b: np.ndarray,
+    voxel_size: float,
+    origin: np.ndarray = None,
+):
+    """Return (common_centers, only_a_centers, only_b_centers) using integer cell diff."""
+    o = _origin_array(origin)
+
+    def to_cells(pts):
+        if pts is None or len(pts) == 0:
+            return np.zeros((0, 3), dtype=np.int32)
+        p = np.asarray(pts, dtype=np.float64)
+        return np.floor((p - o) / voxel_size).astype(np.int32)
+
+    def unique_rows(a):
+        if a.size == 0:
+            return a
+        a_view = np.ascontiguousarray(a).view(np.dtype((np.void, a.dtype.itemsize * a.shape[1])))
+        _, idx = np.unique(a_view, return_index=True)
+        return a[idx]
+
+    def cells_to_centers(cells):
+        if cells.size == 0:
+            return np.zeros((0,3), dtype=np.float64)
+        return o + (cells.astype(np.float64) + 0.5) * voxel_size
+
+    a = unique_rows(to_cells(pts_a))
+    b = unique_rows(to_cells(pts_b))
+
+    if a.size == 0 and b.size == 0:
+        return np.zeros((0,3)), np.zeros((0,3)), np.zeros((0,3))
+    if a.size == 0:
+        return np.zeros((0,3)), np.zeros((0,3)), cells_to_centers(b)
+    if b.size == 0:
+        return np.zeros((0,3)), cells_to_centers(a), np.zeros((0,3))
+
+    ab = np.vstack([a, b])
+    ab_view = np.ascontiguousarray(ab).view(np.dtype((np.void, ab.dtype.itemsize * ab.shape[1])))
+    uniq, inv, counts = np.unique(ab_view, return_inverse=True, return_counts=True)
+    is_a = np.arange(len(ab)) < len(a)
+    only_a = ab[(counts[inv] == 1) & is_a]
+    only_b = ab[(counts[inv] == 1) & (~is_a)]
+    common = ab[(counts[inv] > 1)]
+
+    return cells_to_centers(common), cells_to_centers(only_a), cells_to_centers(only_b)
 
 
 def validate_voxel_sizes(v1: float, v2: float, atol: float = 1e-7, rtol: float = 1e-6) -> bool:
