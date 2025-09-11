@@ -706,9 +706,9 @@ class VoxelViewerWithHDF5Node(Node):
         """Round points to voxel grid."""
         if voxel_size <= 0:
             return points
-        # Anchor rounding to grid origin when available for exact alignment
+        # Anchor quantization to grid origin and use floor to avoid 0.5 collapse
         origin = self.grid_origin if isinstance(self.grid_origin, np.ndarray) else np.array([0.0, 0.0, 0.0], dtype=np.float64)
-        return np.round((points - origin) / voxel_size) * voxel_size + origin
+        return np.floor((points - origin) / voxel_size) * voxel_size + origin
 
     # --- RViz-like cube rendering helpers ---
     def update_points(self, points_array: np.ndarray, colors_array: np.ndarray):

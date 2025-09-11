@@ -12,9 +12,11 @@ def round_points_to_voxel(points: np.ndarray, voxel_size: float, origin: np.ndar
         return np.asarray(points, dtype=np.float64)
     p = np.asarray(points, dtype=np.float64)
     if origin is None:
-        return np.round(p / voxel_size) * voxel_size
+        # Use floor quantization to the voxel cell, avoiding banker's rounding collapse
+        return np.floor(p / voxel_size) * voxel_size
     o = np.asarray(origin, dtype=np.float64).reshape(3)
-    return np.round((p - o) / voxel_size) * voxel_size + o
+    # Quantize to the lower cell corner relative to origin
+    return np.floor((p - o) / voxel_size) * voxel_size + o
 
 
 def compute_two_file_diff(

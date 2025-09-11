@@ -9,13 +9,13 @@ def test_round_points_to_voxel_with_origin():
     origin = np.array([10.0, -5.0, 1.0])
     # Points near the origin-offset voxel centers
     pts = np.array([
-        origin + np.array([0.49, 0.49, 0.49]) * v,   # -> origin + 0*v
-        origin + np.array([1.51, -0.49, 2.51]) * v   # -> origin + [4, -0, 6]
+        origin + np.array([0.49, 0.49, 0.49]) * v,   # -> origin + 0*v (floor)
+        origin + np.array([1.51, -0.49, 2.51]) * v   # -> origin + [2, -2, 4] (floor)
     ])
     out = round_points_to_voxel(pts, v, origin)
     assert out.shape == (2, 3)
     np.testing.assert_allclose(out[0], origin + np.array([0.0, 0.0, 0.0]))
-    np.testing.assert_allclose(out[1], origin + np.array([4.0, -0.0, 6.0]))
+    np.testing.assert_allclose(out[1], origin + np.array([2.0, -2.0, 4.0]))
 
 
 def test_compute_two_file_diff_with_origin():
