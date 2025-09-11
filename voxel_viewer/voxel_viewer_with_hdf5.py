@@ -34,6 +34,10 @@ class VoxelViewerWithHDF5Node(Node):
         self.background_color = [0.1, 0.1, 0.1]
         self.show_axes = True
         
+        # Rendering mode: 'cubes' (default), 'points'
+        self.declare_parameter('render_mode', 'cubes')
+        self.render_mode = self.get_parameter('render_mode').value
+        
         # Initialize components
         self.converter = MarkerToOpen3D()
         
@@ -304,8 +308,8 @@ class VoxelViewerWithHDF5Node(Node):
                     if len(greens) > 0:
                         cube_sets.append((greens, [0.0, 1.0, 0.0]))
                     comp_voxel = self.raw_file_voxel_size if self.raw_file_voxel_size else (self.file_voxel_size if self.file_voxel_size else 1.0)
-                    self.update_cubes(cube_sets, comp_voxel)
-                    self.get_logger().info(f'Initial file-to-file draw (cubes): {len(pts)} centers')
+                    self.update_render(cube_sets, comp_voxel)
+                    self.get_logger().info(f'Initial file-to-file draw: {len(pts)} centers ({self.render_mode})')
                     if not self.view_reset_done:
                         self.vis.reset_view_point(True)
                         self.view_reset_done = True
@@ -397,7 +401,7 @@ class VoxelViewerWithHDF5Node(Node):
                     if len(greens) > 0:
                         cube_sets.append((greens, [0.0, 1.0, 0.0]))
                     vox = self.raw_file_voxel_size or self.file_voxel_size or 1.0
-                    self.update_cubes(cube_sets, vox)
+                    self.update_render(cube_sets, vox)
                     self.vis.reset_view_point(True)
             except Exception as ex:
                 self.get_logger().error(f'Initial two-file draw failed: {ex}')
@@ -456,7 +460,7 @@ class VoxelViewerWithHDF5Node(Node):
             cube_sets.append((reds, [1.0, 0.0, 0.0]))
         if len(greens) > 0:
             cube_sets.append((greens, [0.0, 1.0, 0.0]))
-        self.update_cubes(cube_sets, comp_voxel)
+        self.update_render(cube_sets, comp_voxel)
         bmin = pts_array.min(axis=0)
         bmax = pts_array.max(axis=0)
         whites_n = (cols_array == np.array([1.0, 1.0, 1.0])).all(axis=1).sum()
@@ -512,7 +516,7 @@ class VoxelViewerWithHDF5Node(Node):
             occupied_rounded = self.round_points(self.occupied_points, self.current_voxel_size)
             if len(occupied_rounded) == 0:
                 return
-            self.update_cubes([
+            self.update_render([
                 (np.array(occupied_rounded), [1.0, 0.0, 0.0])  # red
             ], self.file_voxel_size or self.current_voxel_size)
             self.get_logger().info(f'HDF5 file not loaded yet, showing {len(occupied_rounded)} occupied voxels only')
@@ -543,7 +547,7 @@ class VoxelViewerWithHDF5Node(Node):
                 cube_sets.append((only_occ_arr, [1.0, 0.0, 0.0]))
             if only_file_arr.size:
                 cube_sets.append((only_file_arr, [0.0, 1.0, 0.0]))
-            self.update_cubes(cube_sets, comparison_voxel_size)
+            self.update_render(cube_sets, comparison_voxel_size)
             points_array = np.vstack([a for a in [common_arr, only_occ_arr, only_file_arr] if a.size > 0]) if (len(common)+len(only_occupied)+len(only_file)) > 0 else np.zeros((0,3))
             
             # Log statistics and bounds
@@ -582,7 +586,7 @@ class VoxelViewerWithHDF5Node(Node):
                 cube_sets.append((np.array(list(only_occupied)), [1.0, 0.0, 0.0]))  # red
             if len(only_pattern) > 0:
                 cube_sets.append((np.array(list(only_pattern)), [0.0, 0.0, 1.0]))  # blue
-            self.update_cubes(cube_sets, self.current_voxel_size)
+            self.update_render(cube_sets, self.current_voxel_size)
             total = len(common) + len(only_occupied) + len(only_pattern)
             
             # Log statistics
@@ -601,10 +605,53 @@ class VoxelViewerWithHDF5Node(Node):
         origin = self.grid_origin if isinstance(self.grid_origin, np.ndarray) else np.array([0.0, 0.0, 0.0], dtype=np.float64)
         return np.floor((points - origin) / voxel_size) * voxel_size + origin
 
-    # --- RViz-like cube rendering helpers ---
+    # --- Rendering helpers ---
     def update_points(self, points_array: np.ndarray, colors_array: np.ndarray):
-        """Points mode removed; keep no-op for backward compatibility in tests."""
-        return
+        """Update visualization by rendering colored point cloud."""
+        # Remove previous cube geometries if any
+        for g in self.current_geometries:
+            try:
+                self.vis.remove_geometry(g, reset_bounding_box=False)
+            except Exception:
+                pass
+        self.current_geometries = []
+        # Update point cloud
+        pts = np.asarray(points_array, dtype=np.float64).reshape(-1, 3) if points_array is not None else np.zeros((0, 3))
+        cols = np.asarray(colors_array, dtype=np.float64).reshape(-1, 3) if colors_array is not None else np.zeros((0, 3))
+        if len(pts) == 0:
+            return
+        if len(cols) != len(pts):
+            # If colors missing/mismatch, default to white
+            cols = np.tile([1.0, 1.0, 1.0], (len(pts), 1))
+        self.comparison_pcd.points = o3d.utility.Vector3dVector(pts)
+        self.comparison_pcd.colors = o3d.utility.Vector3dVector(cols)
+        try:
+            self.vis.add_geometry(self.comparison_pcd)
+        except Exception:
+            try:
+                self.vis.update_geometry(self.comparison_pcd)
+            except Exception:
+                pass
+        if not self.view_reset_done:
+            self.vis.reset_view_point(True)
+            self.view_reset_done = True
+
+    def _cube_sets_to_points(self, cube_sets: list) -> tuple:
+        """Convert cube sets [(centers, color)] to (points Nx3, colors Nx3)."""
+        pts_list = []
+        cols_list = []
+        for centers, color in cube_sets:
+            if centers is None:
+                continue
+            c = np.asarray(centers)
+            if c.size == 0:
+                continue
+            pts_list.append(c)
+            col = np.asarray(color, dtype=np.float64).reshape(1, 3)
+            cols_list.append(np.repeat(col, c.shape[0], axis=0))
+        if not pts_list:
+            return np.zeros((0, 3)), np.zeros((0, 3))
+        return np.vstack(pts_list), np.vstack(cols_list)
 
     def build_cubes_mesh(self, centers: np.ndarray, voxel_size: float, color_rgb: list) -> o3d.geometry.TriangleMesh:
         """Build a single TriangleMesh containing cubes at given centers.
@@ -646,6 +693,14 @@ class VoxelViewerWithHDF5Node(Node):
         if not self.view_reset_done and len(self.current_geometries) > 0:
             self.vis.reset_view_point(True)
             self.view_reset_done = True
+
+    def update_render(self, cube_sets: list, voxel_size: float):
+        """Dispatch render based on render_mode: 'cubes' or 'points'."""
+        if str(self.render_mode).lower() == 'points':
+            pts, cols = self._cube_sets_to_points(cube_sets)
+            self.update_points(pts, cols)
+        else:
+            self.update_cubes(cube_sets, voxel_size)
 
 
 def main(args=None):

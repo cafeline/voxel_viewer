@@ -21,6 +21,10 @@ pointcloud_compressor_node:
 # Voxel Viewer With HDF5 Parameters
 voxel_viewer_with_hdf5:
   ros__parameters:
+    # Rendering backend for comparison result visualization:
+    #  - 'cubes'  : 立方体メッシュ（従来）
+    #  - 'points' : 色付き点群（新規）
+    render_mode: "points"
     mode: "file_comparison"   # or "topic_comparison"
     hdf5_file: "/tmp/tsudanuma_voxelsize_01_compressed_map.h5"
     raw_hdf5_file: "/tmp/tsudanuma_voxelsize_01_raw_map.h5"
