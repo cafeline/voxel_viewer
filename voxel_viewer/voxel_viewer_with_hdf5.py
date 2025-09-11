@@ -84,7 +84,8 @@ class VoxelViewerWithHDF5Node(Node):
         self.file_load_timer = None  # periodic retry for two-file mode
         
         # Mode-specific initialization
-        self.two_file_comparison = (is_file_mode(self.mode) and bool(self.raw_hdf5_file))
+        # Only treat as two-file comparison when mode is explicitly 'file_comparison'
+        self.two_file_comparison = (str(self.mode).strip().lower() == 'file_comparison' and bool(self.raw_hdf5_file))
 
         if is_file_mode(self.mode):
             if self.two_file_comparison:
@@ -114,6 +115,9 @@ class VoxelViewerWithHDF5Node(Node):
                     return
                 # Try to load HDF5 file, but don't fail if it doesn't exist yet
                 self.load_hdf5_file()
+                # In file_only mode, open visualizer immediately to ensure drawing
+                if str(self.mode).strip().lower() == 'file_only' and not self.vis_initialized:
+                    self.start_visualization()
         else:
             # Topic comparison mode - subscribe to pattern_markers
             self.pattern_sub = self.create_subscription(
@@ -204,6 +208,9 @@ class VoxelViewerWithHDF5Node(Node):
                 self.get_logger().error(f'Failed to read HDF5 file: {self.hdf5_file}')
         except Exception as e:
             self.get_logger().error(f'Error loading HDF5 file: {e}')
+        finally:
+            # Trigger a draw in file_only mode
+            self.update_flag = True
 
     def load_two_hdf5_files(self):
         """Load and decompress compressed and raw HDF5 files for file-vs-file comparison."""
@@ -444,6 +451,10 @@ class VoxelViewerWithHDF5Node(Node):
 
     def update_comparison_visualization(self):
         """Update comparison visualization based on mode."""
+        # Single-file cube visualization
+        if str(self.mode).strip().lower() == 'file_only':
+            self.update_file_only()
+            return
         if is_file_mode(self.mode):
             if self.two_file_comparison:
                 self.update_two_file_comparison()
@@ -451,6 +462,24 @@ class VoxelViewerWithHDF5Node(Node):
                 self.update_file_comparison()
         else:
             self.update_topic_comparison()
+
+    def update_file_only(self):
+        """Render a single HDF5 file as cubes (no comparison)."""
+        # Ensure file is loaded
+        if not self.file_loaded or (self.file_points is None):
+            self.load_hdf5_file()
+            if not self.file_loaded or (self.file_points is None):
+                return
+        # Determine voxel size
+        vox = float(self.file_voxel_size) if self.file_voxel_size else float(self.current_voxel_size or 0.1)
+        pts = np.asarray(self.file_points, dtype=np.float64)
+        if pts.size == 0:
+            return
+        # Convert centers -> lower corners for mesh builder (which shifts by +0.5*voxel)
+        lower = pts - 0.5 * vox
+        cube_sets = [(lower, [1.0, 1.0, 1.0])]
+        # Force cube rendering regardless of render_mode
+        self.update_cubes(cube_sets, vox)
 
     def update_two_file_comparison(self):
         """Compare two HDF5 files: compressed vs raw."""
@@ -765,7 +794,9 @@ class VoxelViewerWithHDF5Node(Node):
         verts, tris = build_cubes_as_arrays(shifted, size)
         mesh.vertices = o3d.utility.Vector3dVector(verts)
         mesh.triangles = o3d.utility.Vector3iVector(tris)
-        mesh.compute_vertex_normals()
+        # Skip normals in file_only mode to reduce memory
+        if str(self.mode).strip().lower() != 'file_only':
+            mesh.compute_vertex_normals()
         mesh.paint_uniform_color(color_rgb)
         return mesh
 

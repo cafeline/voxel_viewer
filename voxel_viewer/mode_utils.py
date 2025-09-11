@@ -2,7 +2,8 @@
 """Small helpers to isolate mode-specific behavior for the viewer."""
 
 def is_file_mode(mode: str) -> bool:
-    return str(mode).strip().lower() == 'file_comparison'
+    m = str(mode).strip().lower()
+    return m in ('file_comparison', 'file_only')
 
 
 def is_topic_mode(mode: str) -> bool:
@@ -12,4 +13,3 @@ def is_topic_mode(mode: str) -> bool:
 def should_load_files(mode: str) -> bool:
     """Return True only when viewer should read HDF5 files."""
     return is_file_mode(mode)
-

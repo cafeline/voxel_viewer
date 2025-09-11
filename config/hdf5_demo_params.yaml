@@ -27,7 +27,7 @@ voxel_viewer_with_hdf5:
     render_mode: "points"
     # 共通点群のダウンサンプリング比率（0<r<=1, 例: 0.1で約1/10）
     common_downsample_ratio: 0.1
-    mode: "file_comparison"   # or "topic_comparison"
+    mode: "file_only"   # file_comparison or "topic_comparison" or "file_only"
     hdf5_file: "/tmp/tsudanuma_voxelsize_01_compressed_map.h5"
     raw_hdf5_file: "/tmp/tsudanuma_voxelsize_01_raw_map.h5"
     # hdf5_file: "/tmp/compressed_map.h5"
