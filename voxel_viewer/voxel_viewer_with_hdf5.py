@@ -3,7 +3,8 @@
 
 import rclpy
 from rclpy.node import Node
-from visualization_msgs.msg import MarkerArray
+from visualization_msgs.msg import MarkerArray, Marker
+from geometry_msgs.msg import Point
 import open3d as o3d
 import numpy as np
 import threading
@@ -37,6 +38,12 @@ class VoxelViewerWithHDF5Node(Node):
         # Rendering mode: 'cubes' (default), 'points'
         self.declare_parameter('render_mode', 'cubes')
         self.render_mode = self.get_parameter('render_mode').value
+        # Downsampling for common (white) points in points mode
+        self.declare_parameter('common_downsample_ratio', 0.1)  # keep 10% by default
+        try:
+            self.common_downsample_ratio = float(self.get_parameter('common_downsample_ratio').value)
+        except Exception:
+            self.common_downsample_ratio = 0.1
         
         # Initialize components
         self.converter = MarkerToOpen3D()
@@ -67,6 +74,8 @@ class VoxelViewerWithHDF5Node(Node):
         # Comparison point cloud
         self.comparison_pcd = o3d.geometry.PointCloud()
         self.current_geometries = []  # for cube meshes
+        # Publishers for diff markers (used in points mode)
+        self.diff_markers_pub = self.create_publisher(MarkerArray, 'difference_markers', 1)
         
         # Visualization
         self.vis = None
@@ -393,15 +402,21 @@ class VoxelViewerWithHDF5Node(Node):
                     whites = pts[(cols == np.array([1.0, 1.0, 1.0])).all(axis=1)]
                     reds = pts[(cols == np.array([1.0, 0.0, 0.0])).all(axis=1)]
                     greens = pts[(cols == np.array([0.0, 1.0, 0.0])).all(axis=1)]
-                    cube_sets = []
-                    if len(whites) > 0:
-                        cube_sets.append((whites, [1.0, 1.0, 1.0]))
-                    if len(reds) > 0:
-                        cube_sets.append((reds, [1.0, 0.0, 0.0]))
-                    if len(greens) > 0:
-                        cube_sets.append((greens, [0.0, 1.0, 0.0]))
                     vox = self.raw_file_voxel_size or self.file_voxel_size or 1.0
-                    self.update_render(cube_sets, vox)
+                    if str(self.render_mode).lower() == 'points':
+                        if len(whites) > 0:
+                            whites_ds = self._downsample_points(whites, self.common_downsample_ratio)
+                            self.update_points(whites_ds, np.tile([1.0, 1.0, 1.0], (len(whites_ds), 1)))
+                        self.publish_diff_markers(reds, [1.0, 0.0, 0.0], greens, [0.0, 1.0, 0.0], vox, frame_id='map', ns1='compressed_only', ns2='raw_only')
+                    else:
+                        cube_sets = []
+                        if len(whites) > 0:
+                            cube_sets.append((whites, [1.0, 1.0, 1.0]))
+                        if len(reds) > 0:
+                            cube_sets.append((reds, [1.0, 0.0, 0.0]))
+                        if len(greens) > 0:
+                            cube_sets.append((greens, [0.0, 1.0, 0.0]))
+                        self.update_render(cube_sets, vox)
                     self.vis.reset_view_point(True)
             except Exception as ex:
                 self.get_logger().error(f'Initial two-file draw failed: {ex}')
@@ -450,17 +465,33 @@ class VoxelViewerWithHDF5Node(Node):
         total = len(pts_array)
         if total == 0:
             return
-        whites = pts_array[(cols_array == np.array([1.0, 1.0, 1.0])).all(axis=1)]
-        reds = pts_array[(cols_array == np.array([1.0, 0.0, 0.0])).all(axis=1)]
-        greens = pts_array[(cols_array == np.array([0.0, 1.0, 0.0])).all(axis=1)]
-        cube_sets = []
-        if len(whites) > 0:
-            cube_sets.append((whites, [1.0, 1.0, 1.0]))
-        if len(reds) > 0:
-            cube_sets.append((reds, [1.0, 0.0, 0.0]))
-        if len(greens) > 0:
-            cube_sets.append((greens, [0.0, 1.0, 0.0]))
-        self.update_render(cube_sets, comp_voxel)
+        if str(self.render_mode).lower() == 'points':
+            # Avoid building cube sets; draw only common (white) as point cloud
+            white_mask = (cols_array == np.array([1.0, 1.0, 1.0])).all(axis=1)
+            whites = pts_array[white_mask]
+            if len(whites) > 0:
+                whites_ds = self._downsample_points(whites, self.common_downsample_ratio)
+                white_colors = np.tile([1.0, 1.0, 1.0], (len(whites_ds), 1))
+                self.update_points(whites_ds, white_colors)
+            # Publish differences as MarkerArray (red=compressed-only, green=raw-only)
+            red_mask = (cols_array == np.array([1.0, 0.0, 0.0])).all(axis=1)
+            green_mask = (cols_array == np.array([0.0, 1.0, 0.0])).all(axis=1)
+            reds = pts_array[red_mask]
+            greens = pts_array[green_mask]
+            self.publish_diff_markers(reds, [1.0, 0.0, 0.0], greens, [0.0, 1.0, 0.0], comp_voxel, frame_id='map', ns1='compressed_only', ns2='raw_only')
+        else:
+            # Legacy cubes path
+            whites = pts_array[(cols_array == np.array([1.0, 1.0, 1.0])).all(axis=1)]
+            reds = pts_array[(cols_array == np.array([1.0, 0.0, 0.0])).all(axis=1)]
+            greens = pts_array[(cols_array == np.array([0.0, 1.0, 0.0])).all(axis=1)]
+            cube_sets = []
+            if len(whites) > 0:
+                cube_sets.append((whites, [1.0, 1.0, 1.0]))
+            if len(reds) > 0:
+                cube_sets.append((reds, [1.0, 0.0, 0.0]))
+            if len(greens) > 0:
+                cube_sets.append((greens, [0.0, 1.0, 0.0]))
+            self.update_render(cube_sets, comp_voxel)
         bmin = pts_array.min(axis=0)
         bmax = pts_array.max(axis=0)
         whites_n = (cols_array == np.array([1.0, 1.0, 1.0])).all(axis=1).sum()
@@ -512,43 +543,47 @@ class VoxelViewerWithHDF5Node(Node):
             return
         
         if not self.file_loaded:
-            # Show only occupied voxels in red
+            # Show only occupied voxels
             occupied_rounded = self.round_points(self.occupied_points, self.current_voxel_size)
             if len(occupied_rounded) == 0:
                 return
-            self.update_render([
-                (np.array(occupied_rounded), [1.0, 0.0, 0.0])  # red
-            ], self.file_voxel_size or self.current_voxel_size)
+            if str(self.render_mode).lower() == 'points':
+                cols = np.tile([1.0, 0.0, 0.0], (len(occupied_rounded), 1))
+                self.update_points(np.array(occupied_rounded), cols)
+            else:
+                self.update_render([
+                    (np.array(occupied_rounded), [1.0, 0.0, 0.0])  # red
+                ], self.file_voxel_size or self.current_voxel_size)
             self.get_logger().info(f'HDF5 file not loaded yet, showing {len(occupied_rounded)} occupied voxels only')
             return
         
         # Integer-grid comparison: use file voxel size and file origin for both sources
         comparison_voxel_size = self.file_voxel_size if self.file_voxel_size else self.current_voxel_size
-        common, only_occ, only_file = compute_diff_common_only(
+        common_arr, only_occ_arr, only_file_arr = compute_diff_common_only(
             self.occupied_points, self.file_points, comparison_voxel_size, origin=self.grid_origin
         )
         
         self.get_logger().info(f'Comparing with voxel size: {comparison_voxel_size} '
                               f'(occupied: {self.current_voxel_size}, file: {self.file_voxel_size})')
         
-        # Find common and unique points
-        only_occupied = set(map(tuple, only_occ))
-        only_file = set(map(tuple, only_file))
-        common = set(map(tuple, common))
-        
-        if len(common) + len(only_occupied) + len(only_file) > 0:
-            common_arr = np.array(list(common)) if len(common) else np.zeros((0,3))
-            only_occ_arr = np.array(list(only_occupied)) if len(only_occupied) else np.zeros((0,3))
-            only_file_arr = np.array(list(only_file)) if len(only_file) else np.zeros((0,3))
-            cube_sets = []
-            if common_arr.size:
-                cube_sets.append((common_arr, [1.0, 1.0, 1.0]))
-            if only_occ_arr.size:
-                cube_sets.append((only_occ_arr, [1.0, 0.0, 0.0]))
-            if only_file_arr.size:
-                cube_sets.append((only_file_arr, [0.0, 1.0, 0.0]))
-            self.update_render(cube_sets, comparison_voxel_size)
-            points_array = np.vstack([a for a in [common_arr, only_occ_arr, only_file_arr] if a.size > 0]) if (len(common)+len(only_occupied)+len(only_file)) > 0 else np.zeros((0,3))
+        if (common_arr.size + only_occ_arr.size + only_file_arr.size) > 0:
+            if str(self.render_mode).lower() == 'points':
+                if common_arr.size:
+                    common_ds = self._downsample_points(common_arr, self.common_downsample_ratio)
+                    self.update_points(common_ds, np.tile([1.0, 1.0, 1.0], (len(common_ds), 1)))
+                # Publish differences as markers
+                self.publish_diff_markers(only_occ_arr, [1.0, 0.0, 0.0], only_file_arr, [0.0, 1.0, 0.0], comparison_voxel_size, frame_id='map', ns1='only_occupied', ns2='only_file')
+                points_array = np.vstack([a for a in [common_arr, only_occ_arr, only_file_arr] if a.size > 0])
+            else:
+                cube_sets = []
+                if common_arr.size:
+                    cube_sets.append((common_arr, [1.0, 1.0, 1.0]))
+                if only_occ_arr.size:
+                    cube_sets.append((only_occ_arr, [1.0, 0.0, 0.0]))
+                if only_file_arr.size:
+                    cube_sets.append((only_file_arr, [0.0, 1.0, 0.0]))
+                self.update_render(cube_sets, comparison_voxel_size)
+                points_array = np.vstack([a for a in [common_arr, only_occ_arr, only_file_arr] if a.size > 0])
             
             # Log statistics and bounds
             total = len(points_array)
@@ -574,26 +609,33 @@ class VoxelViewerWithHDF5Node(Node):
         a_common, a_only_occ, a_only_pat = compute_diff_common_only(
             self.occupied_points, self.pattern_points, self.current_voxel_size, origin=self.grid_origin
         )
-        common = set(map(tuple, a_common))
-        only_occupied = set(map(tuple, a_only_occ))
-        only_pattern = set(map(tuple, a_only_pat))
         
-        if len(common) + len(only_occupied) + len(only_pattern) > 0:
-            cube_sets = []
-            if len(common) > 0:
-                cube_sets.append((np.array(list(common)), [1.0, 1.0, 1.0]))  # white
-            if len(only_occupied) > 0:
-                cube_sets.append((np.array(list(only_occupied)), [1.0, 0.0, 0.0]))  # red
-            if len(only_pattern) > 0:
-                cube_sets.append((np.array(list(only_pattern)), [0.0, 0.0, 1.0]))  # blue
-            self.update_render(cube_sets, self.current_voxel_size)
-            total = len(common) + len(only_occupied) + len(only_pattern)
+        if (a_common.size + a_only_occ.size + a_only_pat.size) > 0:
+            common_arr = a_common if a_common is not None else np.zeros((0,3))
+            only_occ_arr = a_only_occ if a_only_occ is not None else np.zeros((0,3))
+            only_pat_arr = a_only_pat if a_only_pat is not None else np.zeros((0,3))
+            if str(self.render_mode).lower() == 'points':
+                if common_arr.size:
+                    common_ds = self._downsample_points(common_arr, self.common_downsample_ratio)
+                    self.update_points(common_ds, np.tile([1.0, 1.0, 1.0], (len(common_ds), 1)))
+                self.publish_diff_markers(only_occ_arr, [1.0, 0.0, 0.0], only_pat_arr, [0.0, 0.0, 1.0], self.current_voxel_size, frame_id='map', ns1='only_occupied', ns2='only_pattern')
+                total = len(common_arr) + len(only_occ_arr) + len(only_pat_arr)
+            else:
+                cube_sets = []
+                if common_arr.size:
+                    cube_sets.append((common_arr, [1.0, 1.0, 1.0]))  # white
+                if only_occ_arr.size:
+                    cube_sets.append((only_occ_arr, [1.0, 0.0, 0.0]))  # red
+                if only_pat_arr.size:
+                    cube_sets.append((only_pat_arr, [0.0, 0.0, 1.0]))  # blue
+                self.update_render(cube_sets, self.current_voxel_size)
+                total = len(common_arr) + len(only_occ_arr) + len(only_pat_arr)
             
             # Log statistics
             self.get_logger().info(
-                f'Topic comparison - Common: {len(common)} (white), '
-                f'Only occupied: {len(only_occupied)} (red), '
-                f'Only pattern: {len(only_pattern)} (blue), '
+                f'Topic comparison - Common: {len(common_arr)} (white), '
+                f'Only occupied: {len(only_occ_arr)} (red), '
+                f'Only pattern: {len(only_pat_arr)} (blue), '
                 f'Total: {total}'
             )
 
@@ -653,6 +695,25 @@ class VoxelViewerWithHDF5Node(Node):
             return np.zeros((0, 3)), np.zeros((0, 3))
         return np.vstack(pts_list), np.vstack(cols_list)
 
+    def _downsample_points(self, pts: np.ndarray, ratio: float) -> np.ndarray:
+        """Return a downsampled view of pts keeping about ratio fraction (stride-based)."""
+        if pts is None or pts.size == 0:
+            return pts
+        try:
+            r = float(ratio)
+        except Exception:
+            r = 0.1
+        if r >= 1.0:
+            return pts
+        if r <= 0.0:
+            # keep at least 1 point for visibility
+            return pts[:1]
+        step = max(1, int(round(1.0 / r)))
+        ds = pts[::step]
+        if ds.size == 0:
+            return pts[:1]
+        return ds
+
     def build_cubes_mesh(self, centers: np.ndarray, voxel_size: float, color_rgb: list) -> o3d.geometry.TriangleMesh:
         """Build a single TriangleMesh containing cubes at given centers.
         The cube world size equals voxel_size.
@@ -693,6 +754,45 @@ class VoxelViewerWithHDF5Node(Node):
         if not self.view_reset_done and len(self.current_geometries) > 0:
             self.vis.reset_view_point(True)
             self.view_reset_done = True
+
+    def publish_diff_markers(self, pts1: np.ndarray, color1: list, pts2: np.ndarray, color2: list, voxel_size: float, frame_id: str = 'map', ns1: str = 'a_only', ns2: str = 'b_only'):
+        """Publish differences as MarkerArray with two CUBE_LIST markers (uniform color each)."""
+        if self.diff_markers_pub is None:
+            return
+        ma = MarkerArray()
+        # Delete all previous markers first
+        mdel = Marker()
+        mdel.action = Marker.DELETEALL
+        ma.markers.append(mdel)
+        # Helper to create marker
+        def make_marker(points: np.ndarray, color: list, ns: str, mid: int):
+            mk = Marker()
+            mk.header.frame_id = frame_id
+            mk.ns = ns
+            mk.id = mid
+            mk.type = Marker.CUBE_LIST
+            mk.action = Marker.ADD
+            mk.scale.x = float(voxel_size) * 0.9
+            mk.scale.y = float(voxel_size) * 0.9
+            mk.scale.z = float(voxel_size) * 0.9
+            mk.color.r = float(color[0])
+            mk.color.g = float(color[1])
+            mk.color.b = float(color[2])
+            mk.color.a = 1.0
+            if points is not None and points.size > 0:
+                for p in points:
+                    mk.points.append(Point(x=float(p[0]), y=float(p[1]), z=float(p[2])))
+            return mk
+        # Append markers (skip empty ones to reduce msg size)
+        if pts1 is not None and pts1.size > 0:
+            ma.markers.append(make_marker(pts1, color1, ns1, 1))
+        if pts2 is not None and pts2.size > 0:
+            ma.markers.append(make_marker(pts2, color2, ns2, 2))
+        # Publish
+        try:
+            self.diff_markers_pub.publish(ma)
+        except Exception:
+            pass
 
     def update_render(self, cube_sets: list, voxel_size: float):
         """Dispatch render based on render_mode: 'cubes' or 'points'."""
