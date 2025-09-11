@@ -4,6 +4,10 @@
 import sys
 import types
 import numpy as np
+import os
+
+# Add parent directory to path to import package modules
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 
 def make_o3d_stub():
@@ -52,7 +56,11 @@ def make_rclpy_stub():
             return _Param(self._declared.get(name))
         def create_subscription(self, *a, **k):
             self._subs.append((a, k)); return object()
+        def get_logger(self):
+            return self._logger
     rclpy.node = types.SimpleNamespace(Node=_NodeBase)
+    # Also register submodule to satisfy 'from rclpy.node import Node'
+    sys.modules['rclpy.node'] = rclpy.node
     return rclpy
 
 
@@ -107,3 +115,29 @@ def test_viewer_switches_to_instanced_path():
     assert called['instanced'] > 0
     assert called['cubes'] == 0
 
+
+def test_viewer_switches_to_instanced_python_path():
+    # rclpy/o3dスタブ
+    sys.modules['rclpy'] = make_rclpy_stub()
+    sys.modules['open3d'] = make_o3d_stub()
+    import numpy as np
+    from voxel_viewer.voxel_viewer_with_hdf5 import VoxelViewerWithHDF5Node
+    n = VoxelViewerWithHDF5Node()
+    # instanced_gpu_pythonへ切替
+    n.render_mode = 'instanced_gpu_python'
+    # ダミーデータ投入
+    n.occupied_points = np.array([[0,0,0],[1,0,0]], dtype=float)
+    n.pattern_points = np.array([[0,0,0]], dtype=float)
+    n.occupied_received = True
+    n.pattern_received = True
+    n.current_voxel_size = 1.0
+    called = {'inst_py':0, 'cubes':0}
+    def fake_inst_py(c, v):
+        called['inst_py'] += 1
+    def fake_cubes(c, v):
+        called['cubes'] += 1
+    n.update_instanced_python = fake_inst_py
+    n.update_cubes = fake_cubes
+    n.update_topic_comparison()
+    assert called['inst_py'] > 0
+    assert called['cubes'] == 0

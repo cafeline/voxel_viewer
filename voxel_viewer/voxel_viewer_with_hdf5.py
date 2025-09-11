@@ -675,8 +675,27 @@ class VoxelViewerWithHDF5Node(Node):
     def update_render(self, cube_sets: list, voxel_size: float):
         if self.render_mode == 'instanced':
             self.update_instanced(cube_sets, voxel_size)
+        elif self.render_mode == 'instanced_gpu_python':
+            self.update_instanced_python(cube_sets, voxel_size)
         else:
             self.update_cubes(cube_sets, voxel_size)
+
+    def update_instanced_python(self, cube_sets: list, voxel_size: float):
+        """PythonのOpen3D rendering API（妥協実装）経路。
+
+        現行のlegacy Visualizerとは描画バックエンドが異なるため、ここでは
+        InstancedRendererでインスタンス情報を生成し、フォールバックとして
+        点群描画（同一ウィンドウ）を行う。将来的にO3DVisualizer / Open3DScene
+        への切替を行う際は、この関数を差し替える。
+        """
+        # 生成のみ（テスト用）
+        self.ensure_instanced()
+        if self.instanced is None:
+            self.update_cubes(cube_sets, voxel_size)
+            return
+        self.instanced.build_instances(cube_sets, voxel_size)
+        # 暫定: 既存ウィンドウに点で表示
+        self.instanced.draw_as_points()
 
 
 def main(args=None):
