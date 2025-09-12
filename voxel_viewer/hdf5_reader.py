@@ -199,52 +199,46 @@ class HDF5CompressedMapReader:
         else:
             num_patterns = 0
         
+        # Vectorized fast path (optionally parallel via env VV_DECOMPRESS_WORKERS)
+        from .optimized_decompress import (
+            vectorized_points_from_blocks,
+            vectorized_points_from_blocks_parallel,
+        )
+        workers = 0
+        try:
+            import os
+            env = os.getenv('VV_DECOMPRESS_WORKERS', '')
+            workers = int(env) if env else 0
+        except Exception:
+            workers = 0
         t0_all = time.perf_counter()
-        points = []
-        
-        # For each voxel block
-        t_loop = time.perf_counter()
-        for i, (voxel_pos, pattern_idx) in enumerate(zip(voxel_positions, indices)):
-            # Convert pattern_idx to integer if needed
-            idx = int(pattern_idx)
-            if idx >= num_patterns:
-                continue
-                
-            # Get pattern data
-            pattern_start = idx * bytes_per_pattern
-            pattern_end = pattern_start + bytes_per_pattern
-            pattern_bytes = patterns[pattern_start:pattern_end]
-            
-            # Convert pattern bytes to bit array
-            # Patterns are stored with LSB-first per byte in C++ (toBytePattern).
-            # Use little-endian bit order to match.
-            pattern_bits = np.unpackbits(pattern_bytes, bitorder='little')[:pattern_length]
-            
-            # Generate points from pattern: world frame = origin + block offset
-            block_origin = grid_origin + voxel_pos * block_size * voxel_size
-            
-            for bit_idx, occupied in enumerate(pattern_bits):
-                if occupied:
-                    # Calculate position within block
-                    z = bit_idx // (block_size * block_size)
-                    y = (bit_idx % (block_size * block_size)) // block_size
-                    x = bit_idx % block_size
-                    
-                    # Calculate world position at voxel center
-                    point = block_origin + (np.array([x, y, z]) + 0.5) * voxel_size
-                    points.append(point)
-        
-        dt_loop = (time.perf_counter() - t_loop) * 1000
-        if len(points) > 0:
-            self.decompressed_points = np.array(points)
+        if workers and workers > 1:
+            pts = vectorized_points_from_blocks_parallel(
+                voxel_positions=np.asarray(voxel_positions, dtype=np.int32),
+                indices=np.asarray(indices, dtype=np.int32),
+                dictionary_patterns=np.asarray(patterns, dtype=np.uint8),
+                pattern_length=int(pattern_length),
+                block_size=int(block_size),
+                grid_origin=np.asarray(grid_origin, dtype=np.float64),
+                voxel_size=float(voxel_size),
+                processes=workers,
+            )
         else:
-            self.decompressed_points = np.zeros((0, 3))
+            pts = vectorized_points_from_blocks(
+                voxel_positions=np.asarray(voxel_positions, dtype=np.int32),
+                indices=np.asarray(indices, dtype=np.int32),
+                dictionary_patterns=np.asarray(patterns, dtype=np.uint8),
+                pattern_length=int(pattern_length),
+                block_size=int(block_size),
+                grid_origin=np.asarray(grid_origin, dtype=np.float64),
+                voxel_size=float(voxel_size),
+            )
+        self.decompressed_points = pts
         dt_all = (time.perf_counter() - t0_all) * 1000
         print(
-            f'HDF5Reader: decompress(dict) blocks={len(voxel_positions)} points={len(self.decompressed_points)} '
-            f'loop={dt_loop:.1f} ms total={dt_all:.1f} ms'
+            f'HDF5Reader: decompress(dict-fast) blocks={len(voxel_positions)} points={len(pts)} total={dt_all:.1f} ms'
         )
-        return self.decompressed_points
+        return pts
     
     def get_point_cloud(self) -> o3d.geometry.PointCloud:
         """Get Open3D point cloud from decompressed data.
