@@ -4,7 +4,8 @@
 pointcloud_compressor_node:
   ros__parameters:
     # Input/Output settings
-    input_file: "/home/ryo/tsudanuma/maps/tsudanuma-challenge-all.ply"
+    input_file: "/home/ryo/tukuba/tsukuba_all_241006_add-imu-conf.pcd"
+    # input_file: "/home/ryo/tsudanuma/maps/tsudanuma-challenge-all.ply"
     voxel_size: 0.1
     block_size: 13
     min_points_threshold: 2
@@ -13,10 +14,10 @@ pointcloud_compressor_node:
     publish_once: true
     publish_occupied_voxel_markers: true
     save_hdf5: true
-    hdf5_output_file: "/tmp/compressed_map.h5"
+    hdf5_output_file: "/tmp/tsukuba_voxelsize_01_compressed_map.h5"
     # Save raw occupancy voxel grid
     save_raw_hdf5: true
-    raw_hdf5_output_file: "/tmp/tsudanuma_voxelsize_01_raw_map.h5"
+    raw_hdf5_output_file: "/tmp/tsukuba_voxelsize_01_raw_map.h5"
 
 # Voxel Viewer With HDF5 Parameters
 voxel_viewer_with_hdf5:

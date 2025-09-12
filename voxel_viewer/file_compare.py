@@ -2,6 +2,7 @@
 """Pure helper for file-to-file voxel comparison (testable without ROS/Open3D)."""
 
 import numpy as np
+import time
 from typing import Tuple
 
 
@@ -38,6 +39,7 @@ def compute_two_file_diff(
     - file-only: red [1,0,0]
     - raw-only: green [0,1,0]
     """
+    t0 = time.perf_counter()
     # Quantize to integer cell indices to avoid float set/tuple issues
     o = _origin_array(origin)
     def to_cells(pts):
@@ -48,6 +50,7 @@ def compute_two_file_diff(
 
     c1 = to_cells(file_pts)
     c2 = to_cells(raw_pts)
+    t_cells = (time.perf_counter() - t0) * 1000
 
     # Unique rows
     def unique_rows(a):
@@ -57,8 +60,10 @@ def compute_two_file_diff(
         _, idx = np.unique(a_view, return_index=True)
         return a[idx]
 
+    t1 = time.perf_counter()
     u1 = unique_rows(c1)
     u2 = unique_rows(c2)
+    t_unique = (time.perf_counter() - t1) * 1000
 
     # Set-like ops via concatenation + flags
     def diff_and_intersection(a, b):
@@ -78,7 +83,9 @@ def compute_two_file_diff(
         common_mask = (counts[inv] > 1)
         return ab[only_a_mask], ab[only_b_mask], ab[common_mask]
 
+    t2 = time.perf_counter()
     only1_cells, only2_cells, common_cells = diff_and_intersection(u1, u2)
+    t_diff = (time.perf_counter() - t2) * 1000
 
     # Map back to world centers (lower corner + 0.5 voxel)
     def cells_to_centers(cells):
@@ -86,9 +93,11 @@ def compute_two_file_diff(
             return np.zeros((0,3), dtype=np.float64)
         return o + (cells.astype(np.float64) + 0.5) * voxel_size
 
+    t3 = time.perf_counter()
     only1 = cells_to_centers(only1_cells)
     only2 = cells_to_centers(only2_cells)
     common = cells_to_centers(common_cells)
+    t_centers = (time.perf_counter() - t3) * 1000
 
     pts = []
     cols = []
@@ -99,6 +108,11 @@ def compute_two_file_diff(
     if only2.size:
         pts.append(only2); cols.append(np.tile([0.0,1.0,0.0], (len(only2),1)))
     if pts:
+        print(
+            f'file_compare: two_file_diff cells={t_cells:.1f}ms unique={t_unique:.1f}ms '
+            f'diff={t_diff:.1f}ms centers={t_centers:.1f}ms '
+            f'N=[common={len(common)}, only1={len(only1)}, only2={len(only2)}]'
+        )
         return np.vstack(pts), np.vstack(cols)
     return np.zeros((0,3)), np.zeros((0,3))
 
@@ -110,6 +124,7 @@ def compute_diff_common_only(
     origin: np.ndarray = None,
 ):
     """Return (common_centers, only_a_centers, only_b_centers) using integer cell diff."""
+    t0 = time.perf_counter()
     o = _origin_array(origin)
 
     def to_cells(pts):
@@ -132,6 +147,7 @@ def compute_diff_common_only(
 
     a = unique_rows(to_cells(pts_a))
     b = unique_rows(to_cells(pts_b))
+    t_unique = (time.perf_counter() - t0) * 1000
 
     if a.size == 0 and b.size == 0:
         return np.zeros((0,3)), np.zeros((0,3)), np.zeros((0,3))
@@ -140,6 +156,7 @@ def compute_diff_common_only(
     if b.size == 0:
         return np.zeros((0,3)), cells_to_centers(a), np.zeros((0,3))
 
+    t1 = time.perf_counter()
     ab = np.vstack([a, b])
     ab_view = np.ascontiguousarray(ab).view(np.dtype((np.void, ab.dtype.itemsize * ab.shape[1])))
     uniq, inv, counts = np.unique(ab_view, return_inverse=True, return_counts=True)
@@ -147,8 +164,16 @@ def compute_diff_common_only(
     only_a = ab[(counts[inv] == 1) & is_a]
     only_b = ab[(counts[inv] == 1) & (~is_a)]
     common = ab[(counts[inv] > 1)]
+    t_diff = (time.perf_counter() - t1) * 1000
 
-    return cells_to_centers(common), cells_to_centers(only_a), cells_to_centers(only_b)
+    t2 = time.perf_counter()
+    res = (cells_to_centers(common), cells_to_centers(only_a), cells_to_centers(only_b))
+    t_centers = (time.perf_counter() - t2) * 1000
+    print(
+        f'file_compare: diff_common_only unique={t_unique:.1f}ms diff={t_diff:.1f}ms centers={t_centers:.1f}ms '
+        f'N=[common={len(res[0])}, only_a={len(res[1])}, only_b={len(res[2])}]'
+    )
+    return res
 
 
 def validate_voxel_sizes(v1: float, v2: float, atol: float = 1e-7, rtol: float = 1e-6) -> bool:

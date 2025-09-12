@@ -7,6 +7,7 @@ from visualization_msgs.msg import MarkerArray
 import open3d as o3d
 import numpy as np
 import threading
+import time
 from .marker_to_open3d import MarkerToOpen3D
 from .hdf5_reader import HDF5CompressedMapReader
 from .file_compare import compute_two_file_diff, validate_voxel_sizes, compute_diff_common_only
@@ -159,8 +160,18 @@ class VoxelViewerWithHDF5Node(Node):
         
         try:
             reader = HDF5CompressedMapReader(self.hdf5_file)
+            if str(self.mode).strip().lower() == 'file_only':
+                self.get_logger().info(f'file_only: load start: {self.hdf5_file}')
+            t0 = time.perf_counter()
             if reader.read():
+                t_read = (time.perf_counter() - t0) * 1000
+                if str(self.mode).strip().lower() == 'file_only':
+                    self.get_logger().info(f'file_only: reader.read() {t_read:.1f} ms')
+                t1 = time.perf_counter()
                 points = reader.decompress()
+                t_decomp = (time.perf_counter() - t1) * 1000
+                if str(self.mode).strip().lower() == 'file_only':
+                    self.get_logger().info(f'file_only: reader.decompress() {t_decomp:.1f} ms, points={len(points)}')
                 if len(points) > 0:
                     self.file_points = points
                     self.file_loaded = True
@@ -187,7 +198,10 @@ class VoxelViewerWithHDF5Node(Node):
                     # Get statistics
                     stats = reader.get_statistics()
                     if stats:
-                        self.get_logger().info(f'Loaded HDF5 file with {len(points)} points')
+                        if str(self.mode).strip().lower() == 'file_only':
+                            self.get_logger().info(f'file_only: points ready: {len(points)}')
+                        else:
+                            self.get_logger().info(f'Loaded HDF5 file with {len(points)} points')
 
                         # Handle numpy arrays in stats
                         orig_pts = stats.get("original_points", "N/A")
@@ -379,8 +393,10 @@ class VoxelViewerWithHDF5Node(Node):
     def run_visualization(self):
         """Run Open3D visualization loop."""
         # Create visualizer
+        t0 = time.perf_counter()
         self.vis = o3d.visualization.Visualizer()
         self.vis.create_window("Voxel Viewer with HDF5 Comparison")
+        self.get_logger().info(f'Visualizer window ready in {(time.perf_counter()-t0)*1000:.1f} ms')
         
         # Set render options (fixed)
         render_option = self.vis.get_render_option()
@@ -497,7 +513,9 @@ class VoxelViewerWithHDF5Node(Node):
                 return
         comp_voxel = self.raw_file_voxel_size if self.raw_file_voxel_size else (self.file_voxel_size if self.file_voxel_size else 1.0)
         # Use compressed file's grid origin as anchor for rounding
+        t0 = time.perf_counter()
         pts_array, cols_array = compute_two_file_diff(self.file_points, self.raw_file_points, comp_voxel, origin=self.grid_origin)
+        self.get_logger().info(f'compute_two_file_diff total {(time.perf_counter()-t0)*1000:.1f} ms, N={len(pts_array)}')
         total = len(pts_array)
         if total == 0:
             return
@@ -605,8 +623,13 @@ class VoxelViewerWithHDF5Node(Node):
         
         # Integer-grid comparison: use file voxel size and file origin for both sources
         comparison_voxel_size = self.file_voxel_size if self.file_voxel_size else self.current_voxel_size
+        t0 = time.perf_counter()
         common_arr, only_occ_arr, only_file_arr = compute_diff_common_only(
             self.occupied_points, self.file_points, comparison_voxel_size, origin=self.grid_origin
+        )
+        self.get_logger().info(
+            f'compute_diff_common_only(file) {(time.perf_counter()-t0)*1000:.1f} ms, '
+            f'common={len(common_arr)}, only_occ={len(only_occ_arr)}, only_file={len(only_file_arr)}'
         )
         
         self.get_logger().info(f'Comparing with voxel size: {comparison_voxel_size} '
@@ -661,8 +684,13 @@ class VoxelViewerWithHDF5Node(Node):
             return
         
         # Integer-grid comparison (topic vs topic) on current voxel + origin
+        t0 = time.perf_counter()
         a_common, a_only_occ, a_only_pat = compute_diff_common_only(
             self.occupied_points, self.pattern_points, self.current_voxel_size, origin=self.grid_origin
+        )
+        self.get_logger().info(
+            f'compute_diff_common_only(topic) {(time.perf_counter()-t0)*1000:.1f} ms, '
+            f'common={len(a_common)}, only_occ={len(a_only_occ)}, only_pat={len(a_only_pat)}'
         )
         
         if (a_common.size + a_only_occ.size + a_only_pat.size) > 0:
@@ -791,12 +819,22 @@ class VoxelViewerWithHDF5Node(Node):
         # centers provided are at lower corners; shift to centers (+0.5*voxel)
         half_vox = 0.5 * float(voxel_size)
         shifted = np.asarray(centers, dtype=np.float64) + half_vox
+        t0 = time.perf_counter()
         verts, tris = build_cubes_as_arrays(shifted, size)
+        build_ms = (time.perf_counter()-t0)*1000
         mesh.vertices = o3d.utility.Vector3dVector(verts)
         mesh.triangles = o3d.utility.Vector3iVector(tris)
         # Skip normals in file_only mode to reduce memory
         if str(self.mode).strip().lower() != 'file_only':
+            t1 = time.perf_counter()
             mesh.compute_vertex_normals()
+            self.get_logger().info(
+                f'build_cubes_as_arrays {len(centers)} cubes {build_ms:.1f} ms + normals {(time.perf_counter()-t1)*1000:.1f} ms'
+            )
+        else:
+            self.get_logger().info(
+                f'build_cubes_as_arrays {len(centers)} cubes {build_ms:.1f} ms (no normals)'
+            )
         mesh.paint_uniform_color(color_rgb)
         return mesh
 
@@ -805,18 +843,25 @@ class VoxelViewerWithHDF5Node(Node):
         cube_sets: list of (centers ndarray Nx3, color [r,g,b]).
         """
         # Remove previous cube geometries
+        t0 = time.perf_counter()
         for g in self.current_geometries:
             try:
                 self.vis.remove_geometry(g, reset_bounding_box=False)
             except Exception:
                 pass
         self.current_geometries = []
+        t_remove = (time.perf_counter()-t0)*1000
+        self.get_logger().info(f'update_cubes: removed old geometries in {t_remove:.1f} ms')
         # Build and add new meshes
+        t1 = time.perf_counter()
         for centers, color in cube_sets:
             mesh = self.build_cubes_mesh(centers, voxel_size, color)
             if len(mesh.triangles) > 0:
                 self.vis.add_geometry(mesh)
                 self.current_geometries.append(mesh)
+        t_add = (time.perf_counter()-t1)*1000
+        total_cubes = sum(getattr(c, 'shape', [0])[0] if hasattr(c, 'shape') else 0 for c, _ in cube_sets)
+        self.get_logger().info(f'update_cubes: added {len(self.current_geometries)} meshes, cubes={total_cubes} in {t_add:.1f} ms')
         # Reset view once
         if not self.view_reset_done and len(self.current_geometries) > 0:
             self.vis.reset_view_point(True)

@@ -5,6 +5,7 @@ import h5py
 import numpy as np
 import open3d as o3d
 from typing import Tuple, Optional, Dict, Any
+import time
 
 
 class HDF5CompressedMapReader:
@@ -27,6 +28,7 @@ class HDF5CompressedMapReader:
             True if successful, False otherwise
         """
         try:
+            t0 = time.perf_counter()
             with h5py.File(self.filepath, 'r') as f:
                 self.data = {
                     'metadata': self._read_metadata(f),
@@ -36,6 +38,8 @@ class HDF5CompressedMapReader:
                     'statistics': self._read_statistics(f),
                     'raw': self._read_raw_voxel_grid(f)
                 }
+            dt = (time.perf_counter() - t0) * 1000
+            print(f'HDF5Reader: read() done in {dt:.1f} ms')
             return True
         except Exception as e:
             print(f"Error reading HDF5 file: {e}")
@@ -140,6 +144,7 @@ class HDF5CompressedMapReader:
 
         # If raw voxel grid present, use it to generate points
         if raw and 'occupied_voxels' in raw and raw['occupied_voxels'].size > 0:
+            t0 = time.perf_counter()
             voxel_size = raw.get('voxel_size', 0.1)
             if isinstance(voxel_size, np.ndarray):
                 voxel_size = float(voxel_size.squeeze())
@@ -149,6 +154,8 @@ class HDF5CompressedMapReader:
             occ = occ.astype(np.float64)
             centers = origin + (occ + 0.5) * voxel_size
             self.decompressed_points = centers
+            dt = (time.perf_counter() - t0) * 1000
+            print(f'HDF5Reader: decompress(raw_voxel_grid) N={len(centers)} took {dt:.1f} ms')
             return self.decompressed_points
         
         # Extract scalar values from numpy arrays if needed
@@ -192,9 +199,11 @@ class HDF5CompressedMapReader:
         else:
             num_patterns = 0
         
+        t0_all = time.perf_counter()
         points = []
         
         # For each voxel block
+        t_loop = time.perf_counter()
         for i, (voxel_pos, pattern_idx) in enumerate(zip(voxel_positions, indices)):
             # Convert pattern_idx to integer if needed
             idx = int(pattern_idx)
@@ -225,11 +234,16 @@ class HDF5CompressedMapReader:
                     point = block_origin + (np.array([x, y, z]) + 0.5) * voxel_size
                     points.append(point)
         
+        dt_loop = (time.perf_counter() - t_loop) * 1000
         if len(points) > 0:
             self.decompressed_points = np.array(points)
         else:
             self.decompressed_points = np.zeros((0, 3))
-        
+        dt_all = (time.perf_counter() - t0_all) * 1000
+        print(
+            f'HDF5Reader: decompress(dict) blocks={len(voxel_positions)} points={len(self.decompressed_points)} '
+            f'loop={dt_loop:.1f} ms total={dt_all:.1f} ms'
+        )
         return self.decompressed_points
     
     def get_point_cloud(self) -> o3d.geometry.PointCloud:
