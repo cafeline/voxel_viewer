@@ -34,6 +34,7 @@ class VoxelViewerWithHDF5Node(Node):
         # Fixed viewer constants
         self.background_color = [0.1, 0.1, 0.1]
         self.show_axes = True
+        self.bounding_box_color = [0.0, 1.0, 0.0]
         
         # Rendering mode: 'cubes' (default), 'points'
         self.declare_parameter('render_mode', 'cubes')
@@ -496,6 +497,11 @@ class VoxelViewerWithHDF5Node(Node):
         cube_sets = [(lower, [1.0, 1.0, 1.0])]
         # Force cube rendering regardless of render_mode
         self.update_cubes(cube_sets, vox)
+        # Render bounding box wireframe around cube extents for quick map overview
+        bbox = self._build_bounding_box_wireframe(pts, vox)
+        if bbox is not None:
+            self.vis.add_geometry(bbox, reset_bounding_box=False)
+            self.current_geometries.append(bbox)
 
     def update_two_file_comparison(self):
         """Compare two HDF5 files: compressed vs raw."""
@@ -837,6 +843,45 @@ class VoxelViewerWithHDF5Node(Node):
             )
         mesh.paint_uniform_color(color_rgb)
         return mesh
+
+    def _build_bounding_box_wireframe(self, centers: np.ndarray, voxel_size: float):
+        """Create a wireframe bounding box around the provided voxel centers."""
+        if centers is None:
+            return None
+        centers = np.asarray(centers, dtype=np.float64)
+        if centers.size == 0:
+            return None
+        try:
+            half = 0.5 * float(voxel_size)
+        except (TypeError, ValueError):
+            half = 0.0
+        bbox_min_raw = np.min(centers, axis=0) - half
+        bbox_max_raw = np.max(centers, axis=0) + half
+        if np.any(~np.isfinite(bbox_min_raw)) or np.any(~np.isfinite(bbox_max_raw)):
+            return None
+        bbox_min = np.minimum(bbox_min_raw, bbox_max_raw)
+        bbox_max = np.maximum(bbox_min_raw, bbox_max_raw)
+        points = np.array([
+            [bbox_min[0], bbox_min[1], bbox_min[2]],
+            [bbox_max[0], bbox_min[1], bbox_min[2]],
+            [bbox_max[0], bbox_max[1], bbox_min[2]],
+            [bbox_min[0], bbox_max[1], bbox_min[2]],
+            [bbox_min[0], bbox_min[1], bbox_max[2]],
+            [bbox_max[0], bbox_min[1], bbox_max[2]],
+            [bbox_max[0], bbox_max[1], bbox_max[2]],
+            [bbox_min[0], bbox_max[1], bbox_max[2]],
+        ], dtype=np.float64)
+        lines = np.array([
+            [0, 1], [1, 2], [2, 3], [3, 0],
+            [4, 5], [5, 6], [6, 7], [7, 4],
+            [0, 4], [1, 5], [2, 6], [3, 7],
+        ], dtype=np.int32)
+        line_set = o3d.geometry.LineSet()
+        line_set.points = o3d.utility.Vector3dVector(points)
+        line_set.lines = o3d.utility.Vector2iVector(lines)
+        colors = np.tile(np.asarray(self.bounding_box_color, dtype=np.float64), (lines.shape[0], 1))
+        line_set.colors = o3d.utility.Vector3dVector(colors)
+        return line_set
 
     def update_cubes(self, cube_sets: list, voxel_size: float):
         """Update visualization by rendering colored cubes (RViz CUBE_LIST-like).

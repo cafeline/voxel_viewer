@@ -34,15 +34,24 @@ def generate_launch_description():
         viewer_params = ((data.get('voxel_viewer_with_hdf5') or {}).get('ros__parameters') or {})
         comp_params = ((data.get('pointcloud_compressor_node') or {}).get('ros__parameters') or {})
 
-        # Voxel Viewer (always)
-        viewer_node = Node(
-            package='voxel_viewer',
-            executable='voxel_viewer_with_hdf5',
-            name='voxel_viewer_with_hdf5',
-            output='screen',
-            parameters=[viewer_params]
-        )
-        actions.append(viewer_node)
+        # Launch-time option: start_voxel_viewer_with_hdf5 (default: True)
+        start_viewer = True
+        try:
+            launch_cfg = (data.get('launch') or {})
+            val = launch_cfg.get('start_voxel_viewer_with_hdf5', True)
+            start_viewer = val if isinstance(val, bool) else True
+        except Exception:
+            start_viewer = True
+
+        if start_viewer:
+            viewer_node = Node(
+                package='voxel_viewer',
+                executable='voxel_viewer_with_hdf5',
+                name='voxel_viewer_with_hdf5',
+                output='screen',
+                parameters=[viewer_params]
+            )
+            actions.append(viewer_node)
         # Optional: PointCloud Compressor (read from YAML: launch.start_pointcloud_compressor)
         start_compressor = True
         try:
