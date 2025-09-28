@@ -81,7 +81,10 @@ def compute_two_file_diff(
         only_a_mask = (counts[inv] == 1) & is_from_a
         only_b_mask = (counts[inv] == 1) & (~is_from_a)
         common_mask = (counts[inv] > 1)
-        return ab[only_a_mask], ab[only_b_mask], ab[common_mask]
+        common = ab[common_mask]
+        if common.size:
+            common = unique_rows(common)
+        return ab[only_a_mask], ab[only_b_mask], common
 
     t2 = time.perf_counter()
     only1_cells, only2_cells, common_cells = diff_and_intersection(u1, u2)

@@ -13,6 +13,7 @@ def write_min_h5(path, voxel_size, block_size, grid_origin):
         grp.create_dataset('voxel_size', data=np.array(voxel_size, dtype=np.float32))
         grp.create_dataset('block_size', data=np.array(block_size, dtype=np.uint32))
         grp.create_dataset('grid_origin', data=np.asarray(grid_origin, dtype=np.float32))
+        grp.create_dataset('block_index_bit_width', data=np.array(16, dtype=np.uint32))
 
         dict_grp = f.create_group('dictionary')
         pattern_length = block_size ** 3
@@ -23,8 +24,12 @@ def write_min_h5(path, voxel_size, block_size, grid_origin):
         dict_grp.create_dataset('patterns', data=patterns)
 
         comp_grp = f.create_group('compressed_data')
-        comp_grp.create_dataset('indices', data=np.array([0], dtype=np.uint16))
-        comp_grp.create_dataset('voxel_positions', data=np.array([[0, 0, 0]], dtype=np.int32))
+        sentinel = np.iinfo(np.uint16).max
+        block_indices = np.full((1,), sentinel, dtype=np.uint16)
+        block_indices[0] = 0
+        comp_grp.create_dataset('block_indices', data=block_indices)
+        comp_grp.create_dataset('block_offset', data=np.array([0, 0, 0], dtype=np.int32))
+        comp_grp.create_dataset('block_dims', data=np.array([1, 1, 1], dtype=np.int32))
 
 
 def main():

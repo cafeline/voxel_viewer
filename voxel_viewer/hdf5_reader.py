@@ -67,6 +67,8 @@ class HDF5CompressedMapReader:
                 params['pattern_bits'] = group['pattern_bits'][()]
             if 'block_size' in group:
                 params['block_size'] = group['block_size'][()]
+            if 'block_index_bit_width' in group:
+                params['block_index_bit_width'] = group['block_index_bit_width'][()]
             if 'grid_origin' in group:
                 # Expect shape (3,), float32
                 params['grid_origin'] = group['grid_origin'][()]
@@ -94,6 +96,12 @@ class HDF5CompressedMapReader:
                 compressed['voxel_positions'] = group['voxel_positions'][:]
             if 'point_count' in group:
                 compressed['point_count'] = group['point_count'][()]
+            if 'block_indices' in group:
+                compressed['block_indices'] = group['block_indices'][:]
+            if 'block_offset' in group:
+                compressed['block_offset'] = group['block_offset'][:]
+            if 'block_dims' in group:
+                compressed['block_dims'] = group['block_dims'][:]
         return compressed
 
     def _read_raw_voxel_grid(self, f: h5py.File) -> Dict[str, Any]:
@@ -185,7 +193,52 @@ class HDF5CompressedMapReader:
         # Get voxel positions and indices
         voxel_positions = compressed.get('voxel_positions', np.array([]))
         indices = compressed.get('indices', np.array([]))
-        
+
+        block_indices = compressed.get('block_indices')
+        block_dims = compressed.get('block_dims')
+        block_offset = compressed.get('block_offset')
+
+        def _derive_blocks_from_grid():
+            if block_indices is None or block_dims is None:
+                return None
+
+            flat = np.asarray(block_indices)
+            dims = np.asarray(block_dims, dtype=np.int64).reshape(-1)
+            if dims.size < 3:
+                return None
+            dim_x, dim_y, dim_z = int(dims[0]), int(dims[1]), int(dims[2])
+            if dim_x <= 0 or dim_y <= 0 or dim_z <= 0:
+                return None
+            expected = dim_x * dim_y * dim_z
+            if flat.size != expected:
+                return None
+
+            if not np.issubdtype(flat.dtype, np.integer):
+                return None
+
+            sentinel = np.iinfo(flat.dtype).max
+            reshaped = flat.reshape((dim_z, dim_y, dim_x))
+            mask = reshaped != sentinel
+            if not np.any(mask):
+                return np.empty((0, 3), dtype=np.int32), np.empty((0,), dtype=np.int64)
+
+            z_idx, y_idx, x_idx = np.nonzero(mask)
+            indices_local = reshaped[mask]
+
+            offset = np.zeros(3, dtype=np.int64)
+            if block_offset is not None:
+                bo = np.asarray(block_offset, dtype=np.int64).reshape(-1)
+                if bo.size >= 3:
+                    offset[:3] = bo[:3]
+
+            coords = np.stack((x_idx, y_idx, z_idx), axis=1).astype(np.int64)
+            coords += offset
+            return coords.astype(np.int32), indices_local.astype(np.int64)
+
+        derived = _derive_blocks_from_grid()
+        if derived is not None:
+            voxel_positions, indices = derived
+
         # Get dictionary patterns
         patterns = dictionary.get('patterns', np.array([]))
         pattern_length = dictionary.get('pattern_length', block_size**3)

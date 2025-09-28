@@ -13,6 +13,7 @@ def _write_minimal_hdf5(filepath: str, voxel_size: float, block_size: int, grid_
         grp.create_dataset('voxel_size', data=np.array(voxel_size, dtype=np.float32))
         grp.create_dataset('block_size', data=np.array(block_size, dtype=np.uint32))
         grp.create_dataset('grid_origin', data=np.asarray(grid_origin, dtype=np.float32))
+        grp.create_dataset('block_index_bit_width', data=np.array(16, dtype=np.uint32))
 
         # dictionary: single pattern, bit 0 = 1 (LSB-first)
         dict_grp = f.create_group('dictionary')
@@ -23,10 +24,15 @@ def _write_minimal_hdf5(filepath: str, voxel_size: float, block_size: int, grid_
         dict_grp.create_dataset('pattern_length', data=np.array(pattern_length, dtype=np.uint32))
         dict_grp.create_dataset('patterns', data=patterns)
 
-        # compressed_data: one voxel block at [0,0,0], index 0
+        # compressed_data: one voxel block at [0,0,0], index 0 using block grid
         comp_grp = f.create_group('compressed_data')
-        comp_grp.create_dataset('indices', data=np.array([0], dtype=np.uint16))
-        comp_grp.create_dataset('voxel_positions', data=np.array([[0, 0, 0]], dtype=np.int32))
+        sentinel = np.array([0xFFFF], dtype=np.uint16)
+        block_indices = np.full((1,), sentinel[0], dtype=np.uint16)
+        block_indices[0] = 0
+        comp_grp.create_dataset('block_indices', data=block_indices)
+        comp_grp.create_dataset('block_offset', data=np.array([0, 0, 0], dtype=np.int32))
+        comp_grp.create_dataset('block_dims', data=np.array([1, 1, 1], dtype=np.int32))
+        comp_grp.create_dataset('point_count', data=np.array(1, dtype=np.uint64))
 
 
 def test_hdf5_reader_decompress_with_grid_origin(monkeypatch):

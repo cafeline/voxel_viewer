@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Open3D-based viewer for voxel visualization with HDF5 file support."""
 
+import os
 import rclpy
 from rclpy.node import Node
 from visualization_msgs.msg import MarkerArray
@@ -62,6 +63,7 @@ class VoxelViewerWithHDF5Node(Node):
         self.file_voxel_size = None  # Compressed file voxel size
         self.raw_file_voxel_size = None  # Raw file voxel size
         self.raw_file_points = None
+        self._invalid_file_logs = set()
         # Grid origins for proper voxel anchoring
         self.grid_origin = np.array([0.0, 0.0, 0.0], dtype=np.float64)
         self.raw_grid_origin = None
@@ -92,8 +94,14 @@ class VoxelViewerWithHDF5Node(Node):
         if is_file_mode(self.mode):
             if self.two_file_comparison:
                 # Compare compressed vs raw HDF5 files
-                if not self.hdf5_file or not self.raw_hdf5_file:
-                    self.get_logger().error('Both hdf5_file and raw_hdf5_file must be provided for two-file comparison')
+                valid = True
+                if not self.hdf5_file:
+                    self._log_invalid_file_once('compressed', self.hdf5_file)
+                    valid = False
+                if not self.raw_hdf5_file:
+                    self._log_invalid_file_once('raw', self.raw_hdf5_file)
+                    valid = False
+                if not valid:
                     return
                 self.load_two_hdf5_files()
                 # Start visualization immediately for file-to-file mode
@@ -113,7 +121,7 @@ class VoxelViewerWithHDF5Node(Node):
                         return
             else:
                 if not self.hdf5_file:
-                    self.get_logger().error('HDF5 file path not provided for file_comparison mode')
+                    self._log_invalid_file_once('compressed', self.hdf5_file)
                     return
                 # Try to load HDF5 file, but don't fail if it doesn't exist yet
                 self.load_hdf5_file()
@@ -145,18 +153,26 @@ class VoxelViewerWithHDF5Node(Node):
                 self.get_logger().info(f'HDF5 file: {self.hdf5_file}')
         self.get_logger().info('Waiting for first MarkerArray...')
 
+    def _log_invalid_file_once(self, which: str, path: str):
+        """Emit a single error log for an invalid file parameter."""
+        key = (which, path)
+        if key in self._invalid_file_logs:
+            return
+        display = path if path else '[empty]'
+        self.get_logger().error(f'{display}: invalid file')
+        self._invalid_file_logs.add(key)
+
     def load_hdf5_file(self):
         """Load and decompress HDF5 file."""
-        import os
         # Disallow file access unless in file_comparison mode
         if not should_load_files(self.mode):
             return
         if self._compressed_loaded_once:
             return
-        
+
         # Check if file exists
-        if not os.path.exists(self.hdf5_file):
-            self.get_logger().debug(f'HDF5 file not found yet: {self.hdf5_file}')
+        if not self.hdf5_file or not os.path.exists(self.hdf5_file):
+            self._log_invalid_file_once('compressed', self.hdf5_file)
             return
         
         try:
@@ -229,76 +245,80 @@ class VoxelViewerWithHDF5Node(Node):
 
     def load_two_hdf5_files(self):
         """Load and decompress compressed and raw HDF5 files for file-vs-file comparison."""
-        import os
         if not should_load_files(self.mode):
             return
         try:
             # Load compressed file
-            if (not self._compressed_loaded_once) and os.path.exists(self.hdf5_file):
-                reader1 = HDF5CompressedMapReader(self.hdf5_file)
-                if reader1.read():
-                    pts1 = reader1.decompress()
-                    if len(pts1) > 0:
-                        self.file_points = pts1
-                        if reader1.data and 'compression_params' in reader1.data:
-                            params = reader1.data['compression_params']
-                            v1 = params.get('voxel_size', 0.1)
-                            if hasattr(v1, '__len__'):
-                                v1 = v1[0] if len(v1) > 0 else 0.1
-                            self.file_voxel_size = float(v1)
-                            # Capture grid origin for proper anchoring
-                            go = params.get('grid_origin', None)
-                            if go is not None:
-                                try:
-                                    self.grid_origin = np.array(go, dtype=np.float64).reshape(3)
-                                except Exception:
-                                    pass
-                        self.get_logger().info(f'Loaded compressed HDF5: {len(pts1)} points, voxel_size={self.file_voxel_size}')
-                        self._compressed_loaded_once = True
-            else:
-                if not self._compressed_loaded_once:
-                    self.get_logger().warn(f'Compressed HDF5 not found: {self.hdf5_file}')
+            if not self._compressed_loaded_once:
+                if not self.hdf5_file or not os.path.exists(self.hdf5_file):
+                    self._log_invalid_file_once('compressed', self.hdf5_file)
+                else:
+                    reader1 = HDF5CompressedMapReader(self.hdf5_file)
+                    if reader1.read():
+                        pts1 = reader1.decompress()
+                        if pts1 is not None and len(pts1) > 0:
+                            self.file_points = pts1
+                            if reader1.data and 'compression_params' in reader1.data:
+                                params = reader1.data['compression_params']
+                                v1 = params.get('voxel_size', 0.1)
+                                if hasattr(v1, '__len__'):
+                                    v1 = v1[0] if len(v1) > 0 else 0.1
+                                self.file_voxel_size = float(v1)
+                                # Capture grid origin for proper anchoring
+                                go = params.get('grid_origin', None)
+                                if go is not None:
+                                    try:
+                                        self.grid_origin = np.array(go, dtype=np.float64).reshape(3)
+                                    except Exception:
+                                        pass
+                            self.get_logger().info(f'Loaded compressed HDF5: {len(pts1)} points, voxel_size={self.file_voxel_size}')
+                            self._compressed_loaded_once = True
+                    else:
+                        self.get_logger().error(f'Failed to read HDF5 file: {self.hdf5_file}')
 
             # Load raw file
-            if (not self._raw_loaded_once) and os.path.exists(self.raw_hdf5_file):
-                reader2 = HDF5CompressedMapReader(self.raw_hdf5_file)
-                if reader2.read():
-                    pts2 = reader2.decompress()
-                    if len(pts2) > 0:
-                        # Store in dedicated attribute
-                        self.raw_file_points = pts2
-                        # Prefer raw voxel size from /raw_voxel_grid when available
-                        if reader2.data and 'raw' in reader2.data and isinstance(reader2.data['raw'], dict):
-                            raw = reader2.data['raw']
-                            v2 = raw.get('voxel_size', None)
-                            if v2 is not None:
-                                try:
-                                    if hasattr(v2, 'shape'):
-                                        v2 = float(np.array(v2).reshape(-1)[0])
-                                    self.raw_file_voxel_size = float(v2)
-                                except Exception:
-                                    pass
-                        # Fallback: compression_params if raw not found
-                        if self.raw_file_voxel_size is None and reader2.data and 'compression_params' in reader2.data:
-                            params = reader2.data['compression_params']
-                            v2 = params.get('voxel_size', 0.1)
-                            if hasattr(v2, '__len__'):
-                                v2 = v2[0] if len(v2) > 0 else 0.1
-                            self.raw_file_voxel_size = float(v2)
-                        # Also capture origin from raw group if present
-                        if reader2.data and 'raw' in reader2.data:
-                            raw = reader2.data['raw']
-                            ro = raw.get('origin', None)
-                            if ro is not None:
-                                try:
-                                    self.raw_grid_origin = np.array(ro, dtype=np.float64).reshape(3)
-                                except Exception:
-                                    pass
-                        self.get_logger().info(f'Loaded raw HDF5: {len(pts2)} points, voxel_size={self.raw_file_voxel_size}')
-                        self._raw_loaded_once = True
-            else:
-                if not self._raw_loaded_once:
-                    self.get_logger().warn(f'Raw HDF5 not found: {self.raw_hdf5_file}')
+            if not self._raw_loaded_once:
+                if not self.raw_hdf5_file or not os.path.exists(self.raw_hdf5_file):
+                    self._log_invalid_file_once('raw', self.raw_hdf5_file)
+                else:
+                    reader2 = HDF5CompressedMapReader(self.raw_hdf5_file)
+                    if reader2.read():
+                        pts2 = reader2.decompress()
+                        if pts2 is not None and len(pts2) > 0:
+                            # Store in dedicated attribute
+                            self.raw_file_points = pts2
+                            # Prefer raw voxel size from /raw_voxel_grid when available
+                            if reader2.data and 'raw' in reader2.data and isinstance(reader2.data['raw'], dict):
+                                raw = reader2.data['raw']
+                                v2 = raw.get('voxel_size', None)
+                                if v2 is not None:
+                                    try:
+                                        if hasattr(v2, 'shape'):
+                                            v2 = float(np.array(v2).reshape(-1)[0])
+                                        self.raw_file_voxel_size = float(v2)
+                                    except Exception:
+                                        pass
+                            # Fallback: compression_params if raw not found
+                            if self.raw_file_voxel_size is None and reader2.data and 'compression_params' in reader2.data:
+                                params = reader2.data['compression_params']
+                                v2 = params.get('voxel_size', 0.1)
+                                if hasattr(v2, '__len__'):
+                                    v2 = v2[0] if len(v2) > 0 else 0.1
+                                self.raw_file_voxel_size = float(v2)
+                            # Also capture origin from raw group if present
+                            if reader2.data and 'raw' in reader2.data:
+                                raw = reader2.data['raw']
+                                ro = raw.get('origin', None)
+                                if ro is not None:
+                                    try:
+                                        self.raw_grid_origin = np.array(ro, dtype=np.float64).reshape(3)
+                                    except Exception:
+                                        pass
+                            self.get_logger().info(f'Loaded raw HDF5: {len(pts2)} points, voxel_size={self.raw_file_voxel_size}')
+                            self._raw_loaded_once = True
+                    else:
+                        self.get_logger().error(f'Failed to read HDF5 file: {self.raw_hdf5_file}')
+
             # Trigger initial update so something is drawn even without topics
             self.update_flag = True
         except Exception as e:

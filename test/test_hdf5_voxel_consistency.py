@@ -27,9 +27,11 @@ class TestHDF5VoxelConsistency(unittest.TestCase):
             # Compression parameters
             comp_params = f.create_group('compression_params')
             comp_params.create_dataset('voxel_size', data=voxel_size)
-            comp_params.create_dataset('block_size', data=8)
+            block_size = 8
+            comp_params.create_dataset('block_size', data=block_size)
             comp_params.create_dataset('dictionary_size', data=1)
             comp_params.create_dataset('pattern_bits', data=512)
+            comp_params.create_dataset('block_index_bit_width', data=np.array(16, dtype=np.uint32))
             
             # Dictionary - create a simple pattern with all bits set
             dictionary = f.create_group('dictionary')
@@ -40,20 +42,42 @@ class TestHDF5VoxelConsistency(unittest.TestCase):
             
             # Compressed data - convert points to voxel positions
             compressed = f.create_group('compressed_data')
-            voxel_positions = []
-            for point in points:
-                # Convert to voxel grid position (block position)
-                voxel_pos = (point / (voxel_size * 8)).astype(np.int32)
-                voxel_positions.append(voxel_pos)
-            
-            compressed.create_dataset('voxel_positions', data=np.array(voxel_positions))
-            compressed.create_dataset('indices', data=np.zeros(len(voxel_positions), dtype=np.uint16))
+
+            if len(points) == 0:
+                block_indices = np.array([], dtype=np.uint16)
+                block_offset = np.array([0, 0, 0], dtype=np.int32)
+                block_dims = np.array([0, 0, 0], dtype=np.int32)
+                block_count = 0
+            else:
+                # Convert to integer block coordinates
+                block_coords = (points / (voxel_size * block_size)).astype(np.int32)
+                min_coords = block_coords.min(axis=0)
+                max_coords = block_coords.max(axis=0)
+                dims = (max_coords - min_coords) + 1
+                block_offset = min_coords.astype(np.int32)
+                block_dims = dims.astype(np.int32)
+                total_cells = int(dims[0] * dims[1] * dims[2])
+                sentinel = np.iinfo(np.uint16).max
+                block_indices = np.full(total_cells, sentinel, dtype=np.uint16)
+
+                unique_coords = np.unique(block_coords, axis=0)
+                block_count = unique_coords.shape[0]
+                for coord in unique_coords:
+                    rel = coord - block_offset
+                    idx = (rel[0]
+                           + dims[0] * (rel[1]
+                                        + dims[1] * rel[2]))
+                    block_indices[idx] = 0  # dictionary index 0
+
+            compressed.create_dataset('block_indices', data=block_indices)
+            compressed.create_dataset('block_offset', data=block_offset)
+            compressed.create_dataset('block_dims', data=block_dims)
             compressed.create_dataset('point_count', data=len(points))
             
             # Statistics
             stats = f.create_group('statistics')
             stats.create_dataset('original_points', data=len(points))
-            stats.create_dataset('compressed_voxels', data=len(voxel_positions))
+            stats.create_dataset('compressed_voxels', data=block_count)
             stats.create_dataset('compression_ratio', data=1.0)
             
             # Bounding box
