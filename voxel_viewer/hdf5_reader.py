@@ -134,6 +134,8 @@ class HDF5CompressedMapReader:
                 bbox = group['bounding_box'][:]
                 stats['bounding_box_min'] = bbox[0]
                 stats['bounding_box_max'] = bbox[1]
+            if 'bounding_box_margin' in group:
+                stats['bounding_box_margin'] = group['bounding_box_margin'][:]
         return stats
     
     def decompress(self) -> np.ndarray:

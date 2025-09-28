@@ -35,6 +35,13 @@ def _write_minimal_hdf5(filepath: str, voxel_size: float, block_size: int, grid_
         comp_grp.create_dataset('block_dims', data=np.array([1, 1, 1], dtype=np.int32))
         comp_grp.create_dataset('point_count', data=np.array(1, dtype=np.uint64))
 
+        stats_grp = f.create_group('statistics')
+        bbox = np.array([
+            grid_origin.astype(np.float64) - 0.006,
+            grid_origin.astype(np.float64) + voxel_size + 0.006
+        ])
+        stats_grp.create_dataset('bounding_box', data=bbox)
+
 
 def test_hdf5_reader_decompress_with_grid_origin(monkeypatch):
     # Stub open3d before importing the reader
@@ -62,6 +69,14 @@ def test_hdf5_reader_decompress_with_grid_origin(monkeypatch):
         assert pts.shape == (1, 3)
         expected = origin.astype(np.float64) + 0.5 * v
         np.testing.assert_allclose(pts[0], expected, rtol=0, atol=1e-9)
+
+        stats = reader.get_statistics()
+        assert stats is not None
+        bbox_min = stats.get('bounding_box_min')
+        bbox_max = stats.get('bounding_box_max')
+        assert bbox_min is not None and bbox_max is not None
+        np.testing.assert_allclose(bbox_min, np.array([origin[0] - 0.006, origin[1] - 0.006, origin[2] - 0.006]))
+        np.testing.assert_allclose(bbox_max, np.array([origin[0] + v + 0.006, origin[1] + v + 0.006, origin[2] + v + 0.006]))
 
 
 def test_hdf5_reader_rejects_legacy_format(monkeypatch):

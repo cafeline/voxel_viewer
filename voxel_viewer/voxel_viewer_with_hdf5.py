@@ -67,6 +67,8 @@ class VoxelViewerWithHDF5Node(Node):
         # Grid origins for proper voxel anchoring
         self.grid_origin = np.array([0.0, 0.0, 0.0], dtype=np.float64)
         self.raw_grid_origin = None
+        self.file_bbox = None
+        self.raw_file_bbox = None
         # Load-once guards
         self._compressed_loaded_once = False
         self._raw_loaded_once = False
@@ -162,6 +164,21 @@ class VoxelViewerWithHDF5Node(Node):
         self.get_logger().error(f'{display}: invalid file')
         self._invalid_file_logs.add(key)
 
+    def _extract_bbox_from_stats(self, stats):
+        """Parse bounding box arrays from HDF5 statistics dict."""
+        if not stats or not isinstance(stats, dict):
+            return None
+        bbox_min = stats.get('bounding_box_min')
+        bbox_max = stats.get('bounding_box_max')
+        if bbox_min is None or bbox_max is None:
+            return None
+        try:
+            bb_min = np.array(bbox_min, dtype=np.float64).reshape(-1)[:3]
+            bb_max = np.array(bbox_max, dtype=np.float64).reshape(-1)[:3]
+            return bb_min, bb_max
+        except Exception:
+            return None
+
     def load_hdf5_file(self):
         """Load and decompress HDF5 file."""
         # Disallow file access unless in file_comparison mode
@@ -233,6 +250,13 @@ class VoxelViewerWithHDF5Node(Node):
                             self.get_logger().info(f'Compression ratio: {comp_ratio:.2f}')
                         else:
                             self.get_logger().info(f'Compression ratio: {comp_ratio}')
+
+                        bbox_pair = self._extract_bbox_from_stats(stats)
+                        if bbox_pair is not None:
+                            self.file_bbox = bbox_pair
+                            self.get_logger().info(
+                                f'HDF5 bounding box: min={bbox_pair[0].tolist()} max={bbox_pair[1].tolist()}'
+                            )
                 else:
                     self.get_logger().warn('HDF5 file loaded but no points decompressed')
             else:
@@ -272,6 +296,13 @@ class VoxelViewerWithHDF5Node(Node):
                                     except Exception:
                                         pass
                             self.get_logger().info(f'Loaded compressed HDF5: {len(pts1)} points, voxel_size={self.file_voxel_size}')
+                            stats1 = reader1.get_statistics()
+                            bbox_pair = self._extract_bbox_from_stats(stats1)
+                            if bbox_pair is not None:
+                                self.file_bbox = bbox_pair
+                                self.get_logger().info(
+                                    f'Compressed HDF5 bounding box: min={bbox_pair[0].tolist()} max={bbox_pair[1].tolist()}'
+                                )
                             self._compressed_loaded_once = True
                     else:
                         self.get_logger().error(f'Failed to read HDF5 file: {self.hdf5_file}')
@@ -314,6 +345,13 @@ class VoxelViewerWithHDF5Node(Node):
                                         self.raw_grid_origin = np.array(ro, dtype=np.float64).reshape(3)
                                     except Exception:
                                         pass
+                            stats2 = reader2.get_statistics()
+                            bbox_pair = self._extract_bbox_from_stats(stats2)
+                            if bbox_pair is not None:
+                                self.raw_file_bbox = bbox_pair
+                                self.get_logger().info(
+                                    f'Raw HDF5 bounding box: min={bbox_pair[0].tolist()} max={bbox_pair[1].tolist()}'
+                                )
                             self.get_logger().info(f'Loaded raw HDF5: {len(pts2)} points, voxel_size={self.raw_file_voxel_size}')
                             self._raw_loaded_once = True
                     else:
@@ -518,7 +556,7 @@ class VoxelViewerWithHDF5Node(Node):
         # Force cube rendering regardless of render_mode
         self.update_cubes(cube_sets, vox)
         # Render bounding box wireframe around cube extents for quick map overview
-        bbox = self._build_bounding_box_wireframe(pts, vox)
+        bbox = self._build_bounding_box_wireframe(pts, vox, bbox=self.file_bbox)
         if bbox is not None:
             self.vis.add_geometry(bbox, reset_bounding_box=False)
             self.current_geometries.append(bbox)
@@ -864,21 +902,37 @@ class VoxelViewerWithHDF5Node(Node):
         mesh.paint_uniform_color(color_rgb)
         return mesh
 
-    def _build_bounding_box_wireframe(self, centers: np.ndarray, voxel_size: float):
-        """Create a wireframe bounding box around the provided voxel centers."""
-        if centers is None:
-            return None
-        centers = np.asarray(centers, dtype=np.float64)
-        if centers.size == 0:
-            return None
-        try:
-            half = 0.5 * float(voxel_size)
-        except (TypeError, ValueError):
-            half = 0.0
-        bbox_min_raw = np.min(centers, axis=0) - half
-        bbox_max_raw = np.max(centers, axis=0) + half
+    def _build_bounding_box_wireframe(self, centers: np.ndarray, voxel_size: float, bbox=None):
+        """Create a wireframe bounding box around voxel centers or supplied bounds."""
+        bbox_min_raw = None
+        bbox_max_raw = None
+
+        if bbox is not None:
+            try:
+                bb0 = np.asarray(bbox[0], dtype=np.float64).reshape(-1)[:3]
+                bb1 = np.asarray(bbox[1], dtype=np.float64).reshape(-1)[:3]
+                bbox_min_raw = np.minimum(bb0, bb1)
+                bbox_max_raw = np.maximum(bb0, bb1)
+            except Exception:
+                bbox_min_raw = None
+                bbox_max_raw = None
+
+        if bbox_min_raw is None or bbox_max_raw is None:
+            if centers is None:
+                return None
+            centers = np.asarray(centers, dtype=np.float64)
+            if centers.size == 0:
+                return None
+            try:
+                half = 0.5 * float(voxel_size)
+            except (TypeError, ValueError):
+                half = 0.0
+            bbox_min_raw = np.min(centers, axis=0) - half
+            bbox_max_raw = np.max(centers, axis=0) + half
+
         if np.any(~np.isfinite(bbox_min_raw)) or np.any(~np.isfinite(bbox_max_raw)):
             return None
+
         bbox_min = np.minimum(bbox_min_raw, bbox_max_raw)
         bbox_max = np.maximum(bbox_min_raw, bbox_max_raw)
         points = np.array([
