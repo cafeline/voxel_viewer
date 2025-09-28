@@ -190,10 +190,6 @@ class HDF5CompressedMapReader:
         else:
             grid_origin = np.array(grid_origin, dtype=np.float64).reshape(3)
         
-        # Get voxel positions and indices
-        voxel_positions = compressed.get('voxel_positions', np.array([]))
-        indices = compressed.get('indices', np.array([]))
-
         block_indices = compressed.get('block_indices')
         block_dims = compressed.get('block_dims')
         block_offset = compressed.get('block_offset')
@@ -236,8 +232,13 @@ class HDF5CompressedMapReader:
             return coords.astype(np.int32), indices_local.astype(np.int64)
 
         derived = _derive_blocks_from_grid()
-        if derived is not None:
-            voxel_positions, indices = derived
+        if derived is None:
+            raise ValueError("HDF5 file missing block index grid (block_indices)")
+
+        voxel_positions, indices = derived
+        if voxel_positions.size == 0:
+            self.decompressed_points = np.zeros((0, 3), dtype=np.float64)
+            return self.decompressed_points
 
         # Get dictionary patterns
         patterns = dictionary.get('patterns', np.array([]))
